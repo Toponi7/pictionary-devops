@@ -1,0 +1,31 @@
+---
+- name: Configuration et installation de Kubernetes (K3s)
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    - name: Mise à jour des paquets du système
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Installation des outils prérequis (curl)
+      apt:
+        name: curl
+        state: present
+
+    - name: Téléchargement et exécution du script d'installation K3s
+      shell: |
+        curl -sfL https://get.k3s.io | sh -
+      args:
+        creates: /usr/local/bin/k3s # Évite de réinstaller si le binaire existe déjà
+
+    - name: Attendre que le nœud Kubernetes soit prêt
+      command: k3s kubectl get nodes
+      register: k3s_status
+      changed_when: false
+
+    - name: Afficher le statut du cluster K3s
+      debug:
+        msg: "{{ k3s_status.stdout_lines }}"
