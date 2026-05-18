@@ -1,23 +1,6 @@
-# =============================================================
-#  RÉSEAUX
-# =============================================================
-networks:
-  frontend_net:
-    driver: bridge
-  backend_net:
-    driver: bridge
-
-# =============================================================
-#  VOLUMES
-# =============================================================
-
-volumes:
-  db_data:
-
-# =============================================================
-#  SERVICES
-# =============================================================
+# docker-compose.yml
 services:
+
   # -----------------------------------------------------------
   # FRONT-END — Apache (HTML/CSS/JS statique)
   # -----------------------------------------------------------
@@ -34,13 +17,17 @@ services:
     restart: unless-stopped
 
   # -----------------------------------------------------------
-  # BACK-END — PHP (php-fpm + Apache ou php:apache)
+  # BACK-END — PHP avec ton Dockerfile (PDO MySQL inclus)
   # -----------------------------------------------------------
   backend:
-    image: php:8.3-apache
+    build:
+      context: .
+      dockerfile: ./app/Dockerfile  # Modifie le chemin si ton Dockerfile est ailleurs
     container_name: backend
-    expose:
-      - "80"
+    # On expose le port 8080 sur l'hôte si tu veux l'attaquer en direct, 
+    # ou on laisse 'expose' si le front fait office de Reverse Proxy
+    ports:
+      - "8080:80" 
     environment:
       DB_HOST: db
       DB_PORT: 3306
@@ -51,7 +38,8 @@ services:
       - ./app/backend:/var/www/html
       - ./config/php/php.ini:/usr/local/etc/php/php.ini:ro
     networks:
-      - backend_net
+      - frontend_net  # Rejoint le front pour que le JS/Apache puisse l'atteindre
+      - backend_net   # Rejoint la DB
     depends_on:
       db:
         condition: service_healthy
@@ -81,3 +69,15 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
+# =============================================================
+#  RÉSEAUX & VOLUMES
+# =============================================================
+networks:
+  frontend_net:
+    driver: bridge
+  backend_net:
+    driver: bridge
+
+volumes:
+  db_data:
