@@ -1,0 +1,63 @@
+# ansible/deploy-staging.yml
+---
+- name: Provisionnement du serveur Staging et déploiement de l'app
+  hosts: staging
+  become: yes
+  tasks:
+
+    - name: Mise à jour du cache APT
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Installation des paquets prérequis
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - software-properties-common
+          - git
+        state: present
+
+    - name: Ajout de la clé GPG officielle de Docker
+      apt_key:
+        url: https://download.docker.com/linux/debian/gpg
+        state: present
+
+    - name: Ajout du dépôt Docker pour Debian
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/debian {{ ansible_distribution_release }} stable"
+        state: present
+
+    - name: Installation de Docker et Docker Compose
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+
+    - name: Démarrage et activation du service Docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    - name: Création du répertoire de l'application sur le serveur
+      file:
+        path: /opt/pictionary
+        state: directory
+
+    - name: Copie des fichiers du projet vers le serveur
+      copy:
+        src: ../
+        dest: /opt/pictionary/
+
+    - name: Déploiement de la stack avec Docker Compose
+      command: docker compose up -d --build
+      args:
+        chdir: /opt/pictionary/infra/
