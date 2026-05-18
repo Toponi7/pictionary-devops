@@ -4,16 +4,6 @@
 networks:
   monitoring_net:
     driver: bridge
-  infra_net:
-    driver: bridge
-
-# =============================================================
-#  VOLUMES
-# =============================================================
-volumes:
-  db_data:
-  prometheus_data:
-  grafana_data:
 
 # =============================================================
 #  SERVICES
@@ -38,8 +28,6 @@ services:
       - "--web.console.templates=/usr/share/prometheus/consoles"
     networks:
       - monitoring_net
-      - frontend_net
-      - backend_net
     restart: unless-stopped
 
   # -----------------------------------------------------------
@@ -80,35 +68,4 @@ services:
       - "--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)"
     networks:
       - monitoring_net
-    restart: unless-stopped
-
-  # -----------------------------------------------------------
-  # ANSIBLE — conteneur dédié à l'automatisation
-  # -----------------------------------------------------------
-  ansible:
-    image: cytopia/ansible:latest-tools
-    container_name: ansible
-    working_dir: /ansible
-    volumes:
-      - ./ansible:/ansible
-      - ./config/ssh:/root/.ssh:ro   # clés SSH pour accéder aux hôtes
-    networks:
-      - infra_net
-    # Le conteneur reste en vie pour permettre les exec manuels
-    entrypoint: ["tail", "-f", "/dev/null"]
-    restart: unless-stopped
-
-  # -----------------------------------------------------------
-  # TERRAFORM — conteneur dédié à l'IaC
-  # -----------------------------------------------------------
-  terraform:
-    image: hashicorp/terraform:1.8
-    container_name: terraform
-    working_dir: /terraform
-    volumes:
-      - ./terraform:/terraform
-    networks:
-      - infra_net
-    # Le conteneur reste en vie pour permettre les exec manuels
-    entrypoint: ["tail", "-f", "/dev/null"]
     restart: unless-stopped
