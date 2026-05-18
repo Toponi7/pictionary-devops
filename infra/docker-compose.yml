@@ -1,33 +1,32 @@
+# infra/docker-compose.yml
 version: '3.8'
 
 services:
   web:
-    build: .
+    build: 
+      context: ../app
     container_name: pictionary_web
     ports:
       - "80:80"
-    volumes:
-      - ./public:/var/www/html
     depends_on:
       - db
-    environment:
-      - DB_HOST=db
-      - DB_USER=pictionary_user
-      - DB_PASSWORD=P@ssw0rd
-      - DB_NAME=pictionary
+    restart: unless-stopped
 
   db:
     image: mysql:8.0
     container_name: pictionary_db
-    restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_ROOT_PASSWORD: rootpassword
       MYSQL_DATABASE: pictionary
       MYSQL_USER: pictionary_user
-      MYSQL_PASSWORD: secret_password
+      MYSQL_PASSWORD: secretpassword
+    ports:
+      - "3306:3306"
     volumes:
       - db_data:/var/lib/mysql
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      # Le script SQL sera exécuté automatiquement au premier lancement
+      - ../db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
 
 volumes:
   db_data:
