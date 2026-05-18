@@ -42,3 +42,57 @@ jobs:
         # Seul un push direct sur la branche principale applique l'infrastructure
         if: github.ref == 'refs/heads/main'
         run: terraform apply -auto-approve tfplan
+
+#Job Ansible/Terraform
+  terraform-and-ansible:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Installation de Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Init & Apply
+        run: |
+          cd terraform
+          terraform init
+          terraform apply -auto-approve
+
+      # --- ÉTAPE PASSERELLE : RÉCUPÉRATION DE L'IP ---
+      - name: Extraction de l'IP du serveur
+        id: get-ip
+        run: |
+          cd terraform
+          # On extrait l'IP brute générée par l'output Terraform
+          VM_IP=$(terraform output -raw instance_ip)
+          # On la sauvegarde dans l'environnement global du runner GitHub
+          echo "TARGET_IP=$VM_IP" >> $GITHUB_ENV
+
+      # --- ÉTAPE ANSIBLE ---
+      - name: Installation d'Ansible sur le runner GitHub
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible
+
+      - name: Configuration de la clé SSH privée
+        run: |
+          mkdir -p ~/.ssh
+          # Récupération de votre clé privée SSH stockée dans vos secrets GitHub
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          # Enregistrement de l'empreinte SSH de la VM pour éviter le blocage d'authentification
+          ssh-keyscan -H ${{ env.TARGET_IP }} >> ~/.ssh/known_hosts
+
+      - name: Exécution du Playbook Ansible
+        run: |
+          # La virgule après l'IP est obligatoire pour indiquer à Ansible qu'il s'agit d'une liste d'hôtes directe
+          ansible-playbook -i "${{ env.TARGET_IP }}," \
+            -u debian \
+            --private-key ~/.ssh/id_rsa \
+            ansible/playbook.yml
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
