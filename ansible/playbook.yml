@@ -1,16 +1,17 @@
 ---
-- name: Configuration et installation de Kubernetes (K3s)
+- name: Configuration du nœud K3s et déploiement applicatif (Méthode Copie)
   hosts: all
   become: yes
   gather_facts: yes
 
   tasks:
+    # --- 1. PRÉREQUIS ET INSTALLATION DE K3S ---
     - name: Mise à jour des paquets du système
       apt:
         update_cache: yes
         upgrade: dist
 
-    - name: Installation des outils prérequis (curl)
+    - name: Installation des outils de base (curl)
       apt:
         name: curl
         state: present
@@ -19,13 +20,33 @@
       shell: |
         curl -sfL https://get.k3s.io | sh -
       args:
-        creates: /usr/local/bin/k3s # Évite de réinstaller si le binaire existe déjà
+        creates: /usr/local/bin/k3s
 
     - name: Attendre que le nœud Kubernetes soit prêt
       command: k3s kubectl get nodes
       register: k3s_status
       changed_when: false
 
-    - name: Afficher le statut du cluster K3s
+    # --- 2. DÉPLOIEMENT DE L'APPLICATION VIA LE RUNNER ---
+    - name: Création du dossier pour les manifestes sur la VM
+      file:
+        path: /opt/kubernetes
+        state: directory
+        mode: '0755'
+
+    - name: Copie du manifeste Kubernetes depuis le runner GitHub vers la VM
+      copy:
+        # Le chemin est relatif à l'emplacement du playbook (ansible/)
+        src: ../kubernetes/pictionary-app.yaml
+        dest: /opt/kubernetes/pictionary-app.yaml
+        mode: '0644'
+
+    - name: Application du manifeste Kubernetes
+      command: k3s kubectl apply -f /opt/kubernetes/pictionary-app.yaml
+      register: kubectl_apply
+      # Le statut change uniquement si Kubernetes crée ou modifie une ressource
+      changed_when: "'created' in kubectl_apply.stdout or 'configured' in kubectl_apply.stdout"
+
+    - name: Affichage du résultat du déploiement
       debug:
-        msg: "{{ k3s_status.stdout_lines }}"
+        msg: "{{ kubectl_apply.stdout_lines }}"
