@@ -2,10 +2,6 @@
 #  RÉSEAUX
 # =============================================================
 networks:
-  frontend_net:
-    driver: bridge
-  backend_net:
-    driver: bridge
   monitoring_net:
     driver: bridge
   infra_net:
