@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    ports:
+      - "8080:80" # Accessible via http://localhost:8080
+    depends_on:
+      - db
+    environment:
+      # Variables d'environnement pour configurer l'accès à la DB
+      - DB_HOST=db
+      - DB_NAME=pictionary
+      - DB_USER=utilisateur
+      - DB_PASS=motdepasse
+
+  db:
+    image: mariadb:10.11 # Utilisation de MariaDB (très standard en prod)
+    environment:
+      - MYSQL_ROOT_PASSWORD=root_password_secret
+      - MYSQL_DATABASE=pictionary
+      - MYSQL_USER=utilisateur
+      - MYSQL_PASSWORD=motdepasse
+    volumes:
+      # Monte le script SQL pour initialiser la DB au premier lancement
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      # Optionnel mais recommandé : un volume pour persister les données si le conteneur crash
+      - db_data:/var/lib/mysql
+
+volumes:
+  db_data:
