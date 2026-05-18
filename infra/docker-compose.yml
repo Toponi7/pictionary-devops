@@ -71,10 +71,10 @@ services:
       - "80"
     environment:
       DB_HOST: db
-      DB_PORT: 5432
-      DB_NAME: ${DB_NAME:-appdb}
-      DB_USER: ${DB_USER:-appuser}
-      DB_PASSWORD: ${DB_PASSWORD:-changeme}
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
     volumes:
       - ./app/backend:/var/www/html
       - ./config/php/php.ini:/usr/local/etc/php/php.ini:ro
@@ -86,24 +86,25 @@ services:
     restart: unless-stopped
 
   # -----------------------------------------------------------
-  # BASE DE DONNÉES — PostgreSQL
+  # BASE DE DONNÉES — MySQL
   # -----------------------------------------------------------
   db:
-    image: postgres:16-alpine
+    image: mysql:8.4
     container_name: db
     environment:
-      POSTGRES_DB: ${DB_NAME:-appdb}
-      POSTGRES_USER: ${DB_USER:-appuser}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
     volumes:
-      - db_data:/var/lib/postgresql/data
-      - ./config/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - db_data:/var/lib/mysql
+      - ../db/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - backend_net
     expose:
-      - "5432"
+      - "3306"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-appuser} -d ${DB_NAME:-appdb}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -127,6 +128,8 @@ services:
       - "--web.console.templates=/usr/share/prometheus/consoles"
     networks:
       - monitoring_net
+      - frontend_net
+      - backend_net
     restart: unless-stopped
 
   # -----------------------------------------------------------
@@ -138,8 +141,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_USER: ${GF_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GF_ADMIN_PASSWORD:-changeme}
+      GF_SECURITY_ADMIN_USER: ${GF_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_ADMIN_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana_data:/var/lib/grafana
