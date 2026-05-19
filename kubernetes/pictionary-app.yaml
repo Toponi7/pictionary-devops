@@ -77,6 +77,10 @@ spec:
       labels:
         app: web
     spec:
+      initContainers:           
+      - name: wait-for-db
+        image: busybox
+        command: ['sh', '-c', 'until nc -z db 3306; do echo "Attente MariaDB..."; sleep 2; done']
       containers:
       - name: web
         image: ghcr.io/toponi7/pictionary-devops:latest
