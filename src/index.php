@@ -360,7 +360,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
                     }
                 }, 200);
             } catch (error) {
-                display.textContent = "Erreur ";
+                display.textContent = "Erreurss ";
                 display.classList.remove('hidden');
                 btn.disabled = false;
             }
