@@ -10,15 +10,6 @@ on:
       - 'ansible/**'
 
   workflow_dispatch:
-    inputs:
-      action:
-        description: 'Action Terraform (apply ou destroy)'
-        required: true
-        default: 'apply'
-        type: choice
-        options:
-        - apply
-        - destroy
 
   workflow_run:
     workflows: ["Build and Push Docker Image to GHCR"]
@@ -51,22 +42,14 @@ jobs:
         with:
           terraform_version: 1.5.0
 
-      - name: Terraform Init, Workspace & Apply/Destroy
+      - name: Terraform Init, Workspace & Apply
         run: |
           cd terraform
           terraform init
           terraform workspace select ${{ env.TARGET_ENV }} || terraform workspace new ${{ env.TARGET_ENV }}
-
-          if [ "${{ github.event.inputs.action }}" = "destroy" ]; then
-            echo "⚠️ Lancement de TERRAFORM DESTROY ⚠️"
-            terraform destroy -auto-approve
-          else
-            echo "✅ Lancement de TERRAFORM APPLY ✅"
-            terraform apply -auto-approve
-          fi
+          terraform apply -auto-approve
 
       - name: Extraction de l'IP du serveur
-        if: ${{ github.event.inputs.action != 'destroy' }}
         id: get-ip
         run: |
           cd terraform
@@ -74,29 +57,25 @@ jobs:
           echo "TARGET_IP=$VM_IP" >> $GITHUB_ENV
 
       - name: Installation d'Ansible sur le runner GitHub
-        if: ${{ github.event.inputs.action != 'destroy' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y ansible
 
       - name: Configuration de la clé SSH privée et attente du serveur
-        if: ${{ github.event.inputs.action != 'destroy' }}
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
 
-          echo "⌛ Attente de l'ouverture du port SSH sur ${{ env.TARGET_IP }} (Timeout 5 minutes)..."
+          echo "⌛ Attente de l'ouverture du port SSH sur ${{ env.TARGET_IP }}..."
           timeout 300 bash -c '
             until nc -z -w3 ${{ env.TARGET_IP }} 22; do
               sleep 5
             done
           '
-
           ssh-keyscan -H ${{ env.TARGET_IP }} >> ~/.ssh/known_hosts
 
       - name: Exécution du Playbook Ansible
-        if: ${{ github.event.inputs.action != 'destroy' }}
         run: |
           echo "📝 Création de l'inventaire dynamique..."
           cat <<EOF > ansible/inventory.ini
@@ -112,7 +91,7 @@ jobs:
 
           echo "🚀 Lancement d'Ansible avec le tag image : $IMAGE_TAG"
           ansible-playbook -i ansible/inventory.ini \
-            -e "ghcr_username=${{ github.actor }} ghcr_password=${{ secrets.GHCR_PAT }}" \
+            -e "ghcr_username=${{ github.actor }} ghcr_password=${{ secrets.GITHUB_TOKEN }}" \
             -e "image_tag=$IMAGE_TAG" \
             ansible/playbook.yml
         env:
