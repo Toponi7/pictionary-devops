@@ -50,3 +50,18 @@
     - name: Affichage du résultat du déploiement
       debug:
         msg: "{{ kubectl_apply.stdout_lines }}"
+        
+    - name: Attendre que le serveur HTTP de l'application réponde
+      ansible.builtin.uri_action:
+        url: "http://{{ ansible_host }}" # Ou l'URL/IP de votre application
+        status_code: 200
+      register: _result
+      until: _result.status == 200
+      retries: 30       # Nombre de tentatives
+      delay: 10         # Secondes entre chaque tentative (30 * 10s = 5 minutes max)
+      ignore_errors: yes
+
+    - name: Validation finale
+      fail:
+        msg: "Le site n'a pas démarré correctement après 5 minutes."
+      when: _result.status != 200
