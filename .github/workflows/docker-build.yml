@@ -1,13 +1,41 @@
+name: Build and Push Docker Image to GHCR
+
 on:
   push:
     branches:
       - main
-      - preprod
+      - preprod # <-- Ajout de la branche de préproduction
+    # Ne déclenche le build que si ces fichiers sont modifiés
     paths:
-      - 'src/**'
+      - 'src/**' # <-- Modifié pour inclure tout le dossier src, plus sûr que juste index.php
       - 'Dockerfile'
 
-# ...
+env:
+  REGISTRY: ghcr.io
+  # Assurez-vous que ce nom ne contient pas de majuscules. 
+  # Si github.repository plante, remplacez par : "votre-pseudo/pictionary-devops"
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push-image:
+    runs-on: ubuntu-latest
+    
+    # Ces permissions sont OBLIGATOIRES pour que le bot GitHub puisse pousser l'image
+    permissions:
+      contents: read
+      packages: write 
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          # Le GITHUB_TOKEN est généré automatiquement par GitHub, pas besoin de le créer manuellement !
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
@@ -15,13 +43,21 @@ on:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # Tags pour la production (branche main)
+            # --- Tags pour la Production (Branche main) ---
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=V${{ github.run_number }},enable=${{ github.ref == 'refs/heads/main' }}
             
-            # Tags pour la préproduction (branche preprod)
+            # --- Tags pour la Préproduction (Branche preprod) ---
             type=raw,value=preprod-latest,enable=${{ github.ref == 'refs/heads/preprod' }}
             type=raw,value=preprod-V${{ github.run_number }},enable=${{ github.ref == 'refs/heads/preprod' }}
             
-            # Tag SHA commun
+            # --- Tag SHA (Commun aux deux environnements pour le rollback) ---
             type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
