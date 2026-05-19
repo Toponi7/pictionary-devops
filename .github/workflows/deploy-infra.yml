@@ -4,18 +4,29 @@ on:
   push:
     branches:
       - main
-      - preprod # <-- Déclenche le workflow sur les deux branches
+      - preprod
     paths:
       - 'terraform/**'
       - 'ansible/**'
-  workflow_dispatch: # <-- Le bouton manuel !
+  workflow_dispatch:
+  
+  # 👇 NOUVEAU BLOC : Écoute le workflow Docker 👇
+  workflow_run:
+    workflows: ["Build and Push Docker Image to GHCR"] # Doit correspondre EXACTEMENT au "name:" du docker-build.yml
+    types:
+      - completed
+    branches:
+      - preprod # Se déclenche uniquement si le build venait de la branche preprod
 
 jobs:
   terraform-and-ansible:
     name: 'Terraform Provisioning & Ansible Configuration'
     runs-on: ubuntu-latest
     
-    # On injecte les secrets OVH au niveau du job pour que Terraform puisse s'authentifier
+    # 👇 SÉCURITÉ : On ne déploie que si le workflow précédent a RÉUSSI 👇
+    # (Ou si on lance le script manuellement / via un push sur terraform/ansible)
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    
     env:
       OS_USERNAME: ${{ secrets.OS_USERNAME }}
       OS_PASSWORD: ${{ secrets.OS_PASSWORD }}
@@ -36,6 +47,7 @@ jobs:
           terraform init
           
           # Sélectionne le workspace correspondant à la branche active (main ou preprod), ou le crée s'il n'existe pas
+          # Note: Lors d'un workflow_run, github.ref_name contiendra bien la branche d'origine (preprod)
           terraform workspace select ${{ github.ref_name }} || terraform workspace new ${{ github.ref_name }}
           
           # Exécute l'apply dans le bon workspace
@@ -46,7 +58,6 @@ jobs:
         id: get-ip
         run: |
           cd terraform
-          # Force Terraform à lire l'output du bon workspace sélectionné à l'étape précédente
           VM_IP=$(terraform output -raw instance_ip)
           echo "TARGET_IP=$VM_IP" >> $GITHUB_ENV
 
@@ -61,13 +72,11 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          # On attend 10 secondes pour laisser le temps à l'OS d'initier le démon SSH après le boot de la VM
           sleep 10
           ssh-keyscan -H ${{ env.TARGET_IP }} >> ~/.ssh/known_hosts
 
       - name: Exécution du Playbook Ansible
         run: |
-          # Passage des paramètres d'authentification GHCR via l'argument -e
           ansible-playbook -i "${{ env.TARGET_IP }}," \
             -u debian \
             --private-key ~/.ssh/id_rsa \
