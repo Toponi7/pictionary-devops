@@ -1,67 +1,142 @@
 ---
-- name: Configuration du nœud K3s et déploiement applicatif (Méthode Copie)
-  hosts: all
+- name: Configuration du nœud K3s, déploiement applicatif et observabilité
+  hosts: staging_nodes
   become: yes
   gather_facts: yes
 
   tasks:
-    # --- 1. PRÉREQUIS ET INSTALLATION DE K3S ---
+    # =========================================================================
+    # ÉTAPE 0 : CONFIGURATION REGISTRE PRIVÉ (GitHub Container Registry)
+    # =========================================================================
+    - name: Créer le répertoire de configuration k3s
+      ansible.builtin.file:
+        path: /etc/rancher/k3s
+        state: directory
+        mode: '0755'
+
+    - name: Configurer l'authentification GHCR pour k3s
+      ansible.builtin.copy:
+        dest: /etc/rancher/k3s/registries.yaml
+        mode: '0600'
+        content: |
+          configs:
+            "ghcr.io":
+              auth:
+                username: "{{ ghcr_username }}"
+                password: "{{ ghcr_password }}"
+
+    # =========================================================================
+    # ÉTAPE 1 : PRÉREQUIS ET INSTALLATION DE K3S
+    # =========================================================================
     - name: Mise à jour des paquets du système
-      apt:
+      ansible.builtin.apt:
         update_cache: yes
         upgrade: dist
 
-    - name: Installation des outils de base (curl)
-      apt:
-        name: curl
+    - name: Installation des outils de base
+      ansible.builtin.apt:
+        name: 
+          - curl
+          - apt-transport-https
+          - ca-certificates
         state: present
 
     - name: Téléchargement et exécution du script d'installation K3s
-      shell: |
+      ansible.builtin.shell: |
         curl -sfL https://get.k3s.io | sh -
       args:
         creates: /usr/local/bin/k3s
 
-    - name: Attendre que le nœud Kubernetes soit prêt
-      command: k3s kubectl get nodes
+    - name: Attendre que l'API Kubernetes soit disponible (Port 6443)
+      ansible.builtin.wait_for:
+        port: 6443
+        delay: 5
+        timeout: 60
+
+    - name: Vérification du statut du nœud K3s
+      ansible.builtin.command: k3s kubectl get nodes
       register: k3s_status
       changed_when: false
 
-    # --- 2. DÉPLOIEMENT DE L'APPLICATION VIA LE RUNNER ---
+    # =========================================================================
+    # ÉTAPE 2 : DÉPLOIEMENT DE L'APPLICATION MÉTIER
+    # =========================================================================
     - name: Création du dossier pour les manifestes sur la VM
-      file:
+      ansible.builtin.file:
         path: /opt/kubernetes
         state: directory
         mode: '0755'
 
-    - name: Copie du manifeste Kubernetes depuis le runner GitHub vers la VM
-      copy:
-        # Le chemin est relatif à l'emplacement du playbook (ansible/)
+    - name: Copie du manifeste Kubernetes depuis le runner vers la VM
+      ansible.builtin.copy:
         src: ../kubernetes/pictionary-app.yaml
         dest: /opt/kubernetes/pictionary-app.yaml
         mode: '0644'
 
-    - name: Application du manifeste Kubernetes
-      command: k3s kubectl apply -f /opt/kubernetes/pictionary-app.yaml
+    - name: Application du manifeste applicatif
+      ansible.builtin.command: k3s kubectl apply -f /opt/kubernetes/pictionary-app.yaml
       register: kubectl_apply
-      # Le statut change uniquement si Kubernetes crée ou modifie une ressource
       changed_when: "'created' in kubectl_apply.stdout or 'configured' in kubectl_apply.stdout"
 
-    - name: Affichage du résultat du déploiement
-      debug:
-        msg: "{{ kubectl_apply.stdout_lines }}"
-        
+    # =========================================================================
+    # ÉTAPE 3 : INSTALLATION DE HELM
+    # =========================================================================
+    - name: Télécharger le script d'installation de Helm
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+        dest: /tmp/get_helm.sh
+        mode: '0700'
+
+    - name: Installer Helm
+      ansible.builtin.command: /tmp/get_helm.sh
+      args:
+        creates: /usr/local/bin/helm
+
+    # =========================================================================
+    # ÉTAPE 4 : OBSERVABILITÉ (Prometheus & Grafana via Helm avec NodePort)
+    # =========================================================================
+    - name: Ajouter le repository Helm de la communauté Prometheus
+      ansible.builtin.command: helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml 
+      changed_when: false
+
+    - name: Mettre à jour les repositories Helm
+      ansible.builtin.command: helm repo update
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Déployer la stack kube-prometheus-stack (Exposé en NodePort)
+      ansible.builtin.command: >
+        helm upgrade --install monitoring prometheus-community/kube-prometheus-stack
+        --namespace monitoring --create-namespace
+        --set grafana.adminPassword=admin
+        --set grafana.service.type=NodePort
+        --set grafana.service.nodePort=30080
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: helm_install
+      changed_when: "'Release \"monitoring\" does not exist. Installing it now.' in helm_install.stdout or 'has been upgraded' in helm_install.stdout"
+
+    # =========================================================================
+    # ÉTAPE 5 : VALIDATION FINALE (POLLING)
+    # =========================================================================
     - name: Attendre que le serveur HTTP de l'application réponde
       ansible.builtin.uri_action:
-        url: "http://{{ ansible_host }}" # Ou l'URL/IP de votre application
+        url: "http://{{ ansible_host }}:80" 
         status_code: 200
       register: _result
       until: _result.status == 200
-      retries: 30       # Nombre de tentatives
-      delay: 10         # Secondes entre chaque tentative (30 * 10s = 5 minutes max)
+      retries: 30
+      delay: 10         
       ignore_errors: yes
 
-    - name: Validation finale
-      fail:
-        msg: "Le site n'a pas démarré correctement après 5 minutes."
+    - name: Validation finale (Échec si le site ne répond pas)
+      ansible.builtin.fail:
+        msg: "Le site n'a pas démarré correctement après 5 minutes. Vérifiez les logs des pods K3s."
       when: _result.status != 200
+
+    - name: Affichage d'un résumé de fin d'exécution
+      ansible.builtin.debug:
+        msg: "Le nœud K3s, l'application et la stack de monitoring sont déployés avec succès. Le Pictionary répond ! Grafana est accessible sur le port 30080 !"
