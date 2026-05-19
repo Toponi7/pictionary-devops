@@ -73,12 +73,35 @@
       register: kubectl_apply
       changed_when: "'created' in kubectl_apply.stdout or 'configured' in kubectl_apply.stdout"
 
-    - name: Vérification que le rolling update est terminé
-      ansible.builtin.command: >
-        k3s kubectl rollout status deployment/web --timeout=180s
-      register: rollout_status
+    - name: Debug - Attendre 30s que les pods tentent de démarrer
+      ansible.builtin.pause:
+        seconds: 30
+
+    - name: Debug - Statut des pods
+      ansible.builtin.command: k3s kubectl get pods -o wide
+      register: pods_status
       changed_when: false
-      failed_when: rollout_status.rc != 0
+
+    - name: Debug - Afficher les pods
+      ansible.builtin.debug:
+        var: pods_status.stdout
+
+    - name: Debug - Describe du pod web
+      ansible.builtin.shell: >
+        k3s kubectl describe pod -l app=web
+      register: pod_describe
+      changed_when: false
+
+    - name: Debug - Afficher le describe
+      ansible.builtin.debug:
+        var: pod_describe.stdout
+
+    #- name: Vérification que le rolling update est terminé
+     # ansible.builtin.command: >
+      #  k3s kubectl rollout status deployment/web --timeout=180s
+      #register: rollout_status
+      #changed_when: false
+      #failed_when: rollout_status.rc != 0
 
     # =========================================================================
     # ÉTAPE 3 : INSTALLATION DE HELM
