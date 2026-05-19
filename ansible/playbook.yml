@@ -208,7 +208,7 @@
         mode: '0644'
 
     - name: Injecter le dashboard dans Kubernetes via une ConfigMap
-      ansible.builtin.command: >
+      ansible.builtin.shell: >
         k3s kubectl create configmap pictionary-dashboard
         --namespace monitoring
         --from-file=/opt/monitoring/dashboards/pictionary-dashboard.json
