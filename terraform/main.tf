@@ -17,9 +17,9 @@ region = "BHS5"
 
 resource "openstack_compute_instance_v2" "k3s_node" {
   name        = "pictionary-prod-node-1" # Nom de l'instance pour le projet
-  image_name  = "Debian 12"             # L'image système désirée
-  flavor_name = "c3-8-flex"                  # Gabarit chez OVH (ex: 2 vCores, 4 Go RAM)
-  key_pair    = "rudy"     # Le nom de la clé SSH préalablement ajoutée sur OVH
+  image_name  = "Debian 12"              # L'image système désirée
+  flavor_name = "b3-8-flex"              # Gabarit chez OVH (ex: 2 vCores, 4 Go RAM)
+  key_pair    = "rudy"                   # Le nom de la clé SSH préalablement ajoutée sur OVH
 
   network {
     name = "Ext-Net" # Réseau public par défaut d'OVH
