@@ -59,6 +59,15 @@
         regexp: 'ghcr\.io/toponi7/pictionary-devops:[^\s]+'
         replace: 'ghcr.io/toponi7/pictionary-devops:{{ image_tag }}'
 
+      - name: Créer le secret pour accéder à GHCR
+      ansible.builtin.command: >
+        k3s kubectl create secret docker-registry ghcr-secret
+        --docker-server=ghcr.io
+        --docker-username={{ ghcr_username }}
+        --docker-password={{ ghcr_password }}
+        --dry-run=client -o yaml | k3s kubectl apply -f -
+      changed_when: false
+
     - name: Application du manifeste applicatif
       ansible.builtin.command: k3s kubectl apply -f /opt/kubernetes/pictionary-app.yaml
       register: kubectl_apply
