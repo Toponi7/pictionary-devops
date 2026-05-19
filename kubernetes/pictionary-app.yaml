@@ -77,6 +77,10 @@ spec:
       labels:
         app: web
     spec:
+
+      imagePullSecrets:
+      - name: ghcr-secret
+      
       initContainers:           
       - name: wait-for-db
         image: busybox
