@@ -6,6 +6,26 @@
 
   tasks:
     # =========================================================================
+    # ÉTAPE 0 : CONFIGURATION REGISTRE PRIVÉ (GitHub Container Registry)
+    # =========================================================================
+    - name: Créer le répertoire de configuration k3s
+      ansible.builtin.file:
+        path: /etc/rancher/k3s
+        state: directory
+        mode: '0755'
+
+    - name: Configurer l'authentification GHCR pour k3s
+      ansible.builtin.copy:
+        dest: /etc/rancher/k3s/registries.yaml
+        mode: '0600'
+        content: |
+          configs:
+            "ghcr.io":
+              auth:
+                username: "{{ ghcr_username }}"
+                password: "{{ ghcr_password }}"
+
+    # =========================================================================
     # ÉTAPE 1 : PRÉREQUIS ET INSTALLATION DE K3S
     # =========================================================================
     - name: Mise à jour des paquets du système
@@ -64,12 +84,46 @@
       register: kubectl_apply
       changed_when: "'created' in kubectl_apply.stdout or 'configured' in kubectl_apply.stdout"
 
-    - name: Attendre que le déploiement web soit prêt
-      ansible.builtin.command: >
-        k3s kubectl rollout status deployment/web --timeout=300s
-      register: rollout_status
+    # ----- DEBUG TEMPORAIRE -----
+    - name: Debug - Attendre 60s que les pods démarrent
+      ansible.builtin.pause:
+        seconds: 60
+
+    - name: Debug - Statut des pods
+      ansible.builtin.command: k3s kubectl get pods -o wide
+      register: pods_status
       changed_when: false
-      failed_when: rollout_status.rc != 0
+
+    - name: Debug - Afficher les pods
+      ansible.builtin.debug:
+        var: pods_status.stdout
+
+    - name: Debug - Describe complet du pod web
+      ansible.builtin.command: k3s kubectl describe pod -l app=web
+      register: pod_describe
+      changed_when: false
+
+    - name: Debug - Afficher le describe
+      ansible.builtin.debug:
+        var: pod_describe.stdout
+
+    - name: Debug - Logs du conteneur web
+      ansible.builtin.shell: k3s kubectl logs -l app=web --tail=50 --all-containers=true
+      register: pod_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Debug - Afficher les logs
+      ansible.builtin.debug:
+        var: pod_logs.stdout
+    # ----- FIN DEBUG -----
+
+    # - name: Attendre que le déploiement web soit prêt
+    #   ansible.builtin.command: >
+    #     k3s kubectl rollout status deployment/web --timeout=300s
+    #   register: rollout_status
+    #   changed_when: false
+    #   failed_when: rollout_status.rc != 0
 
     # =========================================================================
     # ÉTAPE 3 : INSTALLATION DE HELM
