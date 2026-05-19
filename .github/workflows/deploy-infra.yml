@@ -8,7 +8,18 @@ on:
     paths:
       - 'terraform/**'
       - 'ansible/**'
+      
+  # 👇 AJOUT : Configuration du bouton manuel avec l'option Apply ou Destroy 👇
   workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action Terraform (apply ou destroy)'
+        required: true
+        default: 'apply'
+        type: choice
+        options:
+        - apply
+        - destroy
   
   # 👇 Écoute le workflow Docker 👇
   workflow_run:
@@ -45,7 +56,8 @@ jobs:
         with:
           terraform_version: 1.5.0
 
-      - name: Terraform Init, Workspace & Apply
+      # 👇 MODIFICATION : Condition pour exécuter apply ou destroy 👇
+      - name: Terraform Init, Workspace & Apply/Destroy
         run: |
           cd terraform
           terraform init
@@ -53,11 +65,19 @@ jobs:
           # Sélectionne le workspace correspondant à la branche active ciblée, ou le crée s'il n'existe pas
           terraform workspace select ${{ env.TARGET_ENV }} || terraform workspace new ${{ env.TARGET_ENV }}
           
-          # Exécute l'apply dans le bon workspace
-          terraform apply -auto-approve
+          # Exécute apply ou destroy selon le choix de l'utilisateur (apply par défaut)
+          if [ "${{ github.event.inputs.action }}" = "destroy" ]; then
+            echo "⚠️ Lancement de TERRAFORM DESTROY ⚠️"
+            terraform destroy -auto-approve
+          else
+            echo "✅ Lancement de TERRAFORM APPLY ✅"
+            terraform apply -auto-approve
+          fi
 
       # --- ÉTAPE PASSERELLE : RÉCUPÉRATION DE L'IP ---
+      # (Ignorée si on vient de détruire l'infrastructure)
       - name: Extraction de l'IP du serveur
+        if: ${{ github.event.inputs.action != 'destroy' }}
         id: get-ip
         run: |
           cd terraform
@@ -65,12 +85,15 @@ jobs:
           echo "TARGET_IP=$VM_IP" >> $GITHUB_ENV
 
       # --- ÉTAPE ANSIBLE ---
+      # (Toutes ces étapes sont ignorées en cas de destroy)
       - name: Installation d'Ansible sur le runner GitHub
+        if: ${{ github.event.inputs.action != 'destroy' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y ansible
 
       - name: Configuration de la clé SSH privée et attente du serveur
+        if: ${{ github.event.inputs.action != 'destroy' }}
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
@@ -87,6 +110,7 @@ jobs:
           ssh-keyscan -H ${{ env.TARGET_IP }} >> ~/.ssh/known_hosts
 
       - name: Exécution du Playbook Ansible
+        if: ${{ github.event.inputs.action != 'destroy' }}
         run: |
           ansible-playbook -i "${{ env.TARGET_IP }}," \
             -u debian \
