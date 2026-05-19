@@ -77,7 +77,7 @@ spec:
     spec:
       containers:
       - name: web
-        image: ghcr.io/toponi7/pictionary-devops:latest
+        image: ghcr.io/toponi7/pictionary-devops:preprod-latest
         imagePullPolicy: Always
         env:
         - name: DB_HOST
