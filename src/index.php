@@ -286,7 +286,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
                     btn.disabled = false;
                 }, 200);
             } catch (error) {
-                display.textContent = "Erreur ";
+                display.textContent = "Erreurs ";
                 display.classList.remove('hidden');
                 btn.disabled = false;
             }
