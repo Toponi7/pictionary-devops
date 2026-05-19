@@ -6,28 +6,20 @@ $user = getenv('DB_USER') ?: 'utilisateur';
 $pass = getenv('DB_PASS') ?: 'motdepasse';
 
 try {
-    $pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8", $user, $pass);
-    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $db = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8", $user, $password);
+    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 } catch (PDOException $e) {
-    // Si l'erreur arrive pendant l'AJAX, on renvoie un JSON d'erreur
-    if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
-        header('Content-Type: application/json');
-        echo json_encode(['mot' => "Erreur DB 😢"]);
-        exit;
-    }
     die("Erreur de connexion : " . $e->getMessage());
 }
 
 // Si le JavaScript demande un mot (requête AJAX)
 if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
-    // Attention : On sélectionne bien la colonne 'mot' (et non 'texte')
-    $query  = $pdo->query("SELECT mot FROM mots ORDER BY RAND() LIMIT 1");
+    $query  = $db->query("SELECT texte FROM mots ORDER BY RAND() LIMIT 1");
     $result = $query->fetch(PDO::FETCH_ASSOC);
 
     header('Content-Type: application/json');
     header('Access-Control-Allow-Origin: *');
-    // On renvoie la clé 'mot' du résultat
-    echo json_encode(['mot' => $result ? $result['mot'] : "Base vide !"]);
+    echo json_encode(['mot' => $result ? $result['texte'] : "Base vide !"]);
     exit;
 }
 
@@ -225,6 +217,125 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
             margin-top: 20px;
             letter-spacing: 4px;
         }
+
+        /* --- Timer --- */
+        .timer-section { margin-top: 28px; }
+
+        .timer-label {
+            font-size: 0.85em;
+            font-weight: 900;
+            color: #aaa;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+
+        .duration-btns {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 18px;
+        }
+
+        .duration-btn {
+            font-family: 'Fredoka One', cursive;
+            font-size: 1em;
+            padding: 8px 18px;
+            border-radius: 50px;
+            border: 3px solid #ddd;
+            background: white;
+            color: #aaa;
+            cursor: pointer;
+            box-shadow: 0 4px 0 #ddd;
+            transition: all 0.1s;
+        }
+
+        .duration-btn:hover { border-color: #f9c74f; color: #f3722c; box-shadow: 0 4px 0 #f9c74f; }
+
+        .duration-btn.active {
+            background: #f9c74f;
+            border-color: #f9c74f;
+            color: #333;
+            box-shadow: 0 4px 0 #d4a017;
+        }
+
+        .timer-display {
+            font-family: 'Fredoka One', cursive;
+            font-size: 4.5em;
+            color: #43aa8b;
+            text-shadow: 3px 3px 0 #d0f0e8;
+            line-height: 1;
+            margin: 4px 0 16px;
+            transition: color 0.3s, text-shadow 0.3s;
+        }
+
+        .timer-display.warning { color: #f3722c; text-shadow: 3px 3px 0 #fde8d8; }
+        .timer-display.danger  { color: #f94144; text-shadow: 3px 3px 0 #fdd; }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20%       { transform: translateX(-6px); }
+            40%       { transform: translateX(6px); }
+            60%       { transform: translateX(-4px); }
+            80%       { transform: translateX(4px); }
+        }
+
+        .timer-display.shake { animation: shake 0.5s ease; }
+
+        .timer-bar-track {
+            background: #eee;
+            border-radius: 50px;
+            height: 10px;
+            overflow: hidden;
+            margin-bottom: 16px;
+        }
+
+        .timer-bar {
+            height: 100%;
+            border-radius: 50px;
+            background: linear-gradient(90deg, #43aa8b, #f9c74f);
+            transition: width 1s linear, background 0.5s;
+            width: 100%;
+        }
+
+        .timer-bar.warning { background: linear-gradient(90deg, #f3722c, #f9c74f); }
+        .timer-bar.danger  { background: linear-gradient(90deg, #f94144, #f3722c); }
+
+        .timer-controls { display: flex; justify-content: center; gap: 12px; }
+
+        .btn-start {
+            font-family: 'Fredoka One', cursive;
+            font-size: 1.2em;
+            cursor: pointer;
+            background: linear-gradient(145deg, #577590, #3d5a72);
+            color: white;
+            border: none;
+            border-radius: 50px;
+            padding: 10px 28px;
+            box-shadow: 0 5px 0 #2a3f52, 0 7px 12px rgba(0,0,0,0.2);
+            transition: transform 0.1s, box-shadow 0.1s;
+            letter-spacing: 1px;
+        }
+
+        .btn-start:hover { background: linear-gradient(145deg, #6585a3, #4a6d87); }
+        .btn-start:active { transform: translateY(4px); box-shadow: 0 1px 0 #2a3f52; }
+
+        .btn-reset {
+            font-family: 'Fredoka One', cursive;
+            font-size: 1.2em;
+            cursor: pointer;
+            background: white;
+            color: #aaa;
+            border: 3px solid #ddd;
+            border-radius: 50px;
+            padding: 10px 22px;
+            box-shadow: 0 5px 0 #ddd;
+            transition: transform 0.1s, box-shadow 0.1s;
+            letter-spacing: 1px;
+        }
+
+        .btn-reset:hover { color: #f94144; border-color: #f94144; box-shadow: 0 5px 0 #f94144; }
+        .btn-reset:active { transform: translateY(4px); box-shadow: 0 1px 0 #ddd; }
     </style>
 </head>
 <body>
@@ -262,9 +373,108 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
         <button id="btn" onclick="generateWord()">🎲 Nouveau mot !</button>
 
         <div class="stars">★ ★ ★ ★ ★</div>
+
+        <!-- Timer -->
+        <div class="timer-section">
+            <div class="timer-label">⏱ Durée du tour</div>
+            <div class="duration-btns">
+                <button class="duration-btn active" onclick="setDuration(30, this)">30s</button>
+                <button class="duration-btn" onclick="setDuration(60, this)">60s</button>
+                <button class="duration-btn" onclick="setDuration(90, this)">90s</button>
+            </div>
+            <div class="timer-display" id="timer-display">30</div>
+            <div class="timer-bar-track">
+                <div class="timer-bar" id="timer-bar"></div>
+            </div>
+            <div class="timer-controls">
+                <button class="btn-start" id="btn-start" onclick="toggleTimer()">▶ Lancer</button>
+                <button class="btn-reset" onclick="resetTimer()">↺ Reset</button>
+            </div>
+        </div>
     </div>
 
     <script>
+        // --- Timer ---
+        let duration = 30;
+        let remaining = 30;
+        let interval = null;
+        let running = false;
+
+        function setDuration(sec, btn) {
+            if (running) return;
+            duration = sec;
+            remaining = sec;
+            document.querySelectorAll('.duration-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            updateTimerDisplay();
+        }
+
+        function toggleTimer() {
+            if (running) {
+                pauseTimer();
+            } else {
+                startTimer();
+            }
+        }
+
+        function startTimer() {
+            if (remaining <= 0) resetTimer();
+            running = true;
+            document.getElementById('btn-start').textContent = '⏸ Pause';
+            interval = setInterval(() => {
+                remaining--;
+                updateTimerDisplay();
+                if (remaining <= 0) {
+                    clearInterval(interval);
+                    running = false;
+                    document.getElementById('btn-start').textContent = '▶ Lancer';
+                    timeUp();
+                }
+            }, 1000);
+        }
+
+        function pauseTimer() {
+            clearInterval(interval);
+            running = false;
+            document.getElementById('btn-start').textContent = '▶ Continuer';
+        }
+
+        function resetTimer() {
+            clearInterval(interval);
+            running = false;
+            remaining = duration;
+            document.getElementById('btn-start').textContent = '▶ Lancer';
+            updateTimerDisplay();
+        }
+
+        function updateTimerDisplay() {
+            const display = document.getElementById('timer-display');
+            const bar = document.getElementById('timer-bar');
+            const pct = (remaining / duration) * 100;
+
+            display.textContent = remaining;
+            bar.style.width = pct + '%';
+
+            display.classList.remove('warning', 'danger');
+            bar.classList.remove('warning', 'danger');
+
+            if (remaining <= duration * 0.2) {
+                display.classList.add('danger');
+                bar.classList.add('danger');
+            } else if (remaining <= duration * 0.4) {
+                display.classList.add('warning');
+                bar.classList.add('warning');
+            }
+        }
+
+        function timeUp() {
+            const display = document.getElementById('timer-display');
+            display.textContent = '⏰';
+            display.classList.add('shake');
+            setTimeout(() => display.classList.remove('shake'), 600);
+        }
+
+        // --- Génération du mot ---
         async function generateWord() {
             const display = document.getElementById('word-display');
             const btn = document.getElementById('btn');
@@ -274,7 +484,6 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
             display.classList.add('hidden');
 
             try {
-                // Fait l'appel au bloc PHP situé en haut de cette page
                 const response = await fetch('?action=get_word');
                 const data = await response.json();
 
@@ -286,7 +495,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
                     btn.disabled = false;
                 }, 200);
             } catch (error) {
-                display.textContent = "Erreur ";
+                display.textContent = "Erreur 😢";
                 display.classList.remove('hidden');
                 btn.disabled = false;
             }
