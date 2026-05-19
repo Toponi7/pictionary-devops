@@ -8,10 +8,18 @@ on:
     paths:
       - 'terraform/**'
       - 'ansible/**'
-      
+
   workflow_dispatch:
-  
-  # Écoute le workflow Docker
+    inputs:
+      action:
+        description: 'Action Terraform (apply ou destroy)'
+        required: true
+        default: 'apply'
+        type: choice
+        options:
+        - apply
+        - destroy
+
   workflow_run:
     workflows: ["Build and Push Docker Image to GHCR"]
     types:
@@ -23,16 +31,15 @@ jobs:
   terraform-and-ansible:
     name: 'Terraform Provisioning & Ansible Configuration'
     runs-on: ubuntu-latest
-    
-    # SÉCURITÉ : On ne déploie que si le workflow précédent a RÉUSSI
+
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
-    
+
     env:
       OS_USERNAME: ${{ secrets.OS_USERNAME }}
       OS_PASSWORD: ${{ secrets.OS_PASSWORD }}
       OS_DOMAIN_NAME: "Default"
       TARGET_ENV: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
-      
+
     steps:
       - name: Checkout du code
         uses: actions/checkout@v4
@@ -44,14 +51,22 @@ jobs:
         with:
           terraform_version: 1.5.0
 
-      - name: Terraform Init, Workspace & Apply
+      - name: Terraform Init, Workspace & Apply/Destroy
         run: |
           cd terraform
           terraform init
           terraform workspace select ${{ env.TARGET_ENV }} || terraform workspace new ${{ env.TARGET_ENV }}
-          terraform apply -auto-approve
+
+          if [ "${{ github.event.inputs.action }}" = "destroy" ]; then
+            echo "⚠️ Lancement de TERRAFORM DESTROY ⚠️"
+            terraform destroy -auto-approve
+          else
+            echo "✅ Lancement de TERRAFORM APPLY ✅"
+            terraform apply -auto-approve
+          fi
 
       - name: Extraction de l'IP du serveur
+        if: ${{ github.event.inputs.action != 'destroy' }}
         id: get-ip
         run: |
           cd terraform
@@ -59,35 +74,46 @@ jobs:
           echo "TARGET_IP=$VM_IP" >> $GITHUB_ENV
 
       - name: Installation d'Ansible sur le runner GitHub
+        if: ${{ github.event.inputs.action != 'destroy' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y ansible
 
       - name: Configuration de la clé SSH privée et attente du serveur
+        if: ${{ github.event.inputs.action != 'destroy' }}
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          
-          echo "⌛ Attente de l'ouverture du port SSH sur ${{ env.TARGET_IP }}..."
+
+          echo "⌛ Attente de l'ouverture du port SSH sur ${{ env.TARGET_IP }} (Timeout 5 minutes)..."
           timeout 300 bash -c '
             until nc -z -w3 ${{ env.TARGET_IP }} 22; do
               sleep 5
             done
           '
+
           ssh-keyscan -H ${{ env.TARGET_IP }} >> ~/.ssh/known_hosts
 
       - name: Exécution du Playbook Ansible
+        if: ${{ github.event.inputs.action != 'destroy' }}
         run: |
           echo "📝 Création de l'inventaire dynamique..."
           cat <<EOF > ansible/inventory.ini
           [staging_nodes]
           ${{ env.TARGET_IP }} ansible_user=debian ansible_ssh_private_key_file=~/.ssh/id_rsa
           EOF
-          
-          echo "🚀 Lancement d'Ansible..."
+
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            IMAGE_TAG="sha-$(echo '${{ github.event.workflow_run.head_sha }}' | cut -c1-7)"
+          else
+            IMAGE_TAG="sha-$(echo '${{ github.sha }}' | cut -c1-7)"
+          fi
+
+          echo "🚀 Lancement d'Ansible avec le tag image : $IMAGE_TAG"
           ansible-playbook -i ansible/inventory.ini \
             -e "ghcr_username=${{ github.actor }} ghcr_password=${{ secrets.GHCR_PAT }}" \
+            -e "image_tag=$IMAGE_TAG" \
             ansible/playbook.yml
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
