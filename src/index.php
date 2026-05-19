@@ -292,18 +292,21 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
     <script>
         let countdownInterval;
         const TIME_LIMIT = 60; // Temps en secondes
+        let isTimerRunning = false; // Variable d'état pour le contrôle d'exécution
 
         function startTimer() {
             const timerBox = document.getElementById('timer-box');
             const timerDisplay = document.getElementById('timer');
+            
             let timeLeft = TIME_LIMIT;
+            isTimerRunning = true; // Déclaration de l'état actif
 
-            // Afficher la zone du chrono et réinitialiser les styles
+            // Affichage et réinitialisation des styles
             timerBox.style.display = 'block';
             timerBox.classList.remove('urgent');
             timerDisplay.textContent = `⏳ ${timeLeft}s`;
 
-            // Arrêter l'ancien chrono s'il y en a un en cours
+            // Nettoyage de l'intervalle mémoire précédent
             if (countdownInterval) {
                 clearInterval(countdownInterval);
             }
@@ -312,15 +315,16 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
                 timeLeft--;
                 timerDisplay.textContent = `⏳ ${timeLeft}s`;
 
-                // Alerte quand il reste 10 secondes ou moins
+                // Déclenchement conditionnel de l'alerte CSS
                 if (timeLeft <= 10 && timeLeft > 0) {
                     timerBox.classList.add('urgent');
                 }
 
-                // Fin du temps
+                // Arrêt du cycle
                 if (timeLeft <= 0) {
                     clearInterval(countdownInterval);
                     timerDisplay.textContent = "⏱️ Temps écoulé !";
+                    isTimerRunning = false; // Autorise une relance au prochain appel
                 }
             }, 1000);
         }
@@ -334,23 +338,26 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
             display.classList.remove('pop');
             display.classList.add('hidden');
             
-            // Cacher le chrono pendant le chargement du mot
-            timerBox.style.display = 'none';
+            // Masque l'élément DOM du minuteur uniquement s'il n'est pas actif
+            if (!isTimerRunning) {
+                timerBox.style.display = 'none';
+            }
 
             try {
-                // Fait l'appel au bloc PHP situé en haut de cette page
                 const response = await fetch('?action=get_word');
                 const data = await response.json();
 
                 setTimeout(() => {
                     display.textContent = data.mot;
                     display.classList.remove('hidden');
-                    void display.offsetWidth; // force reflow pour relancer l'animation
+                    void display.offsetWidth; // Force le reflow du navigateur
                     display.classList.add('pop');
                     btn.disabled = false;
 
-                    // Lancer le chronomètre une fois le mot affiché
-                    startTimer();
+                    // Condition d'exécution pour ne pas écraser un décompte en cours
+                    if (!isTimerRunning) {
+                        startTimer();
+                    }
                 }, 200);
             } catch (error) {
                 display.textContent = "Erreur ";
