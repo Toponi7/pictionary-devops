@@ -12,7 +12,7 @@ on:
 env:
   REGISTRY: ghcr.io
   # github.repository correspond à "TonNomUtilisateur/TonRepo"
-  IMAGE_NAME: ${{ salim-nejdi/pictionary-web }}
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push-image:
