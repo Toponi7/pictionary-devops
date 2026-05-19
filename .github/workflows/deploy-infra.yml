@@ -87,7 +87,7 @@ jobs:
           
           echo "🚀 Lancement d'Ansible..."
           ansible-playbook -i ansible/inventory.ini \
-            -e "ghcr_username=${{ github.actor }} ghcr_password=${{ secrets.GHCR_PAT }}" \
+            -e "ghcr_username=${{ github.actor }} ghcr_password=${{ secrets.GITHUB_TOKEN }}" \
             ansible/playbook.yml
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
