@@ -1,25 +1,33 @@
 <?php
-// Connexion à la base de données MySQL via les variables d'environnement Docker
-$host     = getenv('DB_HOST')     ?: 'db';
-$user     = getenv('DB_USER')     ?: 'pictionary_user';
-$password = getenv('DB_PASSWORD') ?: '';
-$dbname   = getenv('DB_NAME')     ?: 'pictionary';
+// Connexion à la base de données MySQL avec les BONS identifiants du code fonctionnel
+$host = getenv('DB_HOST') ?: 'db';
+$db   = getenv('DB_NAME') ?: 'pictionary';
+$user = getenv('DB_USER') ?: 'utilisateur';
+$pass = getenv('DB_PASS') ?: 'motdepasse';
 
 try {
-    $db = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8", $user, $password);
-    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8", $user, $pass);
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 } catch (PDOException $e) {
+    // Si l'erreur arrive pendant l'AJAX, on renvoie un JSON d'erreur
+    if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
+        header('Content-Type: application/json');
+        echo json_encode(['mot' => "Erreur DB 😢"]);
+        exit;
+    }
     die("Erreur de connexion : " . $e->getMessage());
 }
 
 // Si le JavaScript demande un mot (requête AJAX)
 if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
-    $query  = $db->query("SELECT texte FROM mots ORDER BY RAND() LIMIT 1");
+    // Attention : On sélectionne bien la colonne 'mot' (et non 'texte')
+    $query  = $pdo->query("SELECT mot FROM mots ORDER BY RAND() LIMIT 1");
     $result = $query->fetch(PDO::FETCH_ASSOC);
 
     header('Content-Type: application/json');
     header('Access-Control-Allow-Origin: *');
-    echo json_encode(['mot' => $result ? $result['texte'] : "Base vide !"]);
+    // On renvoie la clé 'mot' du résultat
+    echo json_encode(['mot' => $result ? $result['mot'] : "Base vide !"]);
     exit;
 }
 
@@ -266,6 +274,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
             display.classList.add('hidden');
 
             try {
+                // Fait l'appel au bloc PHP situé en haut de cette page
                 const response = await fetch('?action=get_word');
                 const data = await response.json();
 
