@@ -1,5 +1,4 @@
 <?php
-// Connexion à la base de données MySQL avec les BONS identifiants du code fonctionnel
 $host = getenv('DB_HOST') ?: 'db';
 $db   = getenv('DB_NAME') ?: 'pictionary';
 $user = getenv('DB_USER') ?: 'utilisateur';
@@ -9,7 +8,6 @@ try {
     $pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8", $user, $pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 } catch (PDOException $e) {
-    // Si l'erreur arrive pendant l'AJAX, on renvoie un JSON d'erreur
     if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
         header('Content-Type: application/json');
         echo json_encode(['mot' => "Erreur DB 😢"]);
@@ -18,20 +16,15 @@ try {
     die("Erreur de connexion : " . $e->getMessage());
 }
 
-// Si le JavaScript demande un mot (requête AJAX)
 if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
-    // Attention : On sélectionne bien la colonne 'mot' (et non 'texte')
     $query  = $pdo->query("SELECT mot FROM mots ORDER BY RAND() LIMIT 1");
     $result = $query->fetch(PDO::FETCH_ASSOC);
 
     header('Content-Type: application/json');
     header('Access-Control-Allow-Origin: *');
-    // On renvoie la clé 'mot' du résultat
     echo json_encode(['mot' => $result ? $result['mot'] : "Base vide !"]);
     exit;
 }
-
-// Page HTML principale
 ?>
 <!DOCTYPE html>
 <html lang="fr">
@@ -132,10 +125,12 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
             padding: 28px 20px;
             margin: 15px 0;
             position: relative;
-            min-height: 110px;
+            min-height: 140px;
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
+            gap: 8px;
         }
 
         .mot-container::before {
@@ -155,6 +150,25 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
             font-size: 2em;
             filter: drop-shadow(2px 2px 2px rgba(0,0,0,0.2));
         }
+
+        /* ---- EMOJI ---- */
+        #emoji-display {
+            font-size: 3.5em;
+            line-height: 1;
+            transition: opacity 0.2s ease;
+        }
+
+        #emoji-display.hidden { opacity: 0; }
+
+        @keyframes emojiPop {
+            from { transform: scale(0.3) rotate(-15deg); opacity: 0; }
+            to   { transform: scale(1) rotate(0deg); opacity: 1; }
+        }
+
+        #emoji-display.pop {
+            animation: emojiPop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        /* --------------- */
 
         #word-display {
             font-family: 'Fredoka One', cursive;
@@ -177,7 +191,6 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
             animation: wordPop 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
         }
 
-        /* --- STYLES DU CHRONOMÈTRE --- */
         .timer-container {
             font-family: 'Fredoka One', cursive;
             font-size: 1.8em;
@@ -196,7 +209,6 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
             50% { transform: scale(1.1); }
             100% { transform: scale(1); }
         }
-        /* ---------------------------- */
 
         .divider {
             display: flex;
@@ -275,6 +287,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
         <p class="subtitle">Faites deviner le mot à votre équipe ✨</p>
 
         <div class="mot-container">
+            <div id="emoji-display">🎨</div>
             <div id="word-display">?</div>
         </div>
 
@@ -290,78 +303,281 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
     </div>
 
     <script>
+        // =====================================================
+        // MAP MOT → EMOJI
+        // Ajoute ici tous les mots présents dans ta base MySQL.
+        // Clé = mot en MAJUSCULES (pour la comparaison),
+        // valeur = emoji correspondant.
+        // Les mots absents affichent 🎨 par défaut.
+        // =====================================================
+        const emojiMap = {
+            // Animaux
+            'CHAT':        '🐱',
+            'CHIEN':       '🐶',
+            'LION':        '🦁',
+            'TIGRE':       '🐯',
+            'ÉLÉPHANT':    '🐘',
+            'GIRAFE':      '🦒',
+            'SINGE':       '🐒',
+            'LAPIN':       '🐰',
+            'COCHON':      '🐷',
+            'VACHE':       '🐮',
+            'CHEVAL':      '🐴',
+            'MOUTON':      '🐑',
+            'POULE':       '🐔',
+            'CANARD':      '🦆',
+            'POISSON':     '🐟',
+            'REQUIN':      '🦈',
+            'DAUPHIN':     '🐬',
+            'PIEUVRE':     '🐙',
+            'CRABE':       '🦀',
+            'GRENOUILLE':  '🐸',
+            'SERPENT':     '🐍',
+            'CROCODILE':   '🐊',
+            'TORTUE':      '🐢',
+            'DINOSAURE':   '🦕',
+            'DRAGON':      '🐉',
+            'PAPILLON':    '🦋',
+            'ABEILLE':     '🐝',
+            'ARAIGNÉE':    '🕷️',
+            'HIBOU':       '🦉',
+            'PINGOUIN':    '🐧',
+            'FLAMANT':     '🦩',
+            'PERROQUET':   '🦜',
+            'AIGLE':       '🦅',
+
+            // Nourriture
+            'PIZZA':       '🍕',
+            'BURGER':      '🍔',
+            'FRITE':       '🍟',
+            'HOT DOG':     '🌭',
+            'SUSHI':       '🍣',
+            'RAMEN':       '🍜',
+            'TACO':        '🌮',
+            'GLACE':       '🍦',
+            'GÂTEAU':      '🎂',
+            'COOKIE':      '🍪',
+            'CHOCOLAT':    '🍫',
+            'BONBON':      '🍬',
+            'POMME':       '🍎',
+            'BANANE':      '🍌',
+            'FRAISE':      '🍓',
+            'RAISIN':      '🍇',
+            'PASTÈQUE':    '🍉',
+            'ANANAS':      '🍍',
+            'CITRON':      '🍋',
+            'CERISE':      '🍒',
+            'MANGUE':      '🥭',
+            'CAROTTE':     '🥕',
+            'MAÏS':        '🌽',
+            'BROCOLI':     '🥦',
+            'AUBERGINE':   '🍆',
+            'CHAMPIGNON':  '🍄',
+            'FROMAGE':     '🧀',
+            'OEU':         '🥚',
+            'PAIN':        '🍞',
+            'CAFÉ':        '☕',
+            'THÉ':         '🍵',
+            'JUS':         '🧃',
+            'BIÈRE':       '🍺',
+            'VIN':         '🍷',
+
+            // Véhicules & transport
+            'VOITURE':     '🚗',
+            'CAMION':      '🚛',
+            'BUS':         '🚌',
+            'MOTO':        '🏍️',
+            'VÉLO':        '🚲',
+            'TROTTINETTE': '🛴',
+            'AVION':       '✈️',
+            'HÉLICOPTÈRE': '🚁',
+            'FUSÉE':       '🚀',
+            'BATEAU':      '🚢',
+            'SOUS-MARIN':  '🤿',
+            'TRAIN':       '🚂',
+            'METRO':       '🚇',
+            'TAXI':        '🚕',
+            'AMBULANCE':   '🚑',
+            'POMPIER':     '🚒',
+            'POLICE':      '🚓',
+            'TRACTEUR':    '🚜',
+            'MONTGOLFIÈRE':'🎈',
+            'SKATEBOARD':  '🛹',
+
+            // Nature & météo
+            'SOLEIL':      '☀️',
+            'LUNE':        '🌙',
+            'ÉTOILE':      '⭐',
+            'NUAGE':       '☁️',
+            'PLUIE':       '🌧️',
+            'NEIGE':       '❄️',
+            'ARC-EN-CIEL': '🌈',
+            'ÉCLAIR':      '⚡',
+            'VOLCAN':      '🌋',
+            'MONTAGNE':    '⛰️',
+            'PLAGE':       '🏖️',
+            'DÉSERT':      '🏜️',
+            'FORÊT':       '🌲',
+            'FLEUR':       '🌸',
+            'CACTUS':      '🌵',
+            'ARBRE':       '🌳',
+            'FEUILLE':     '🍃',
+            'CHAMPIGN':    '🍄',
+            'MER':         '🌊',
+            'FEU':         '🔥',
+            'GLACE2':      '🧊',
+            'VENT':        '💨',
+
+            // Objets & maison
+            'MAISON':      '🏠',
+            'CHÂTEAU':     '🏰',
+            'ÉCOLE':       '🏫',
+            'HÔPITAL':     '🏥',
+            'ÉGLISE':      '⛪',
+            'TENTE':       '⛺',
+            'TÉLÉPHONE':   '📱',
+            'ORDINATEUR':  '💻',
+            'TÉLÉVISION':  '📺',
+            'CAMÉRA':      '📷',
+            'LUNETTES':    '👓',
+            'CLÉ':         '🔑',
+            'CADENAS':     '🔒',
+            'LAMPE':       '💡',
+            'BOUGIE':      '🕯️',
+            'LIVRE':       '📚',
+            'CRAYON':      '✏️',
+            'CISEAU':      '✂️',
+            'MARTEAU':     '🔨',
+            'CLE':         '🔧',
+            'BALLON':      '🎈',
+            'CADEAU':      '🎁',
+            'COURONNE':    '👑',
+            'DIAMANT':     '💎',
+            'BAGUE':       '💍',
+            'CHAPEAU':     '🎩',
+            'PARAPLUIE':   '☂️',
+            'SAC':         '👜',
+            'CHAUSSURE':   '👟',
+            'BOTTE':       '👢',
+            'ROBE':        '👗',
+            'TSHIRT':      '👕',
+            'PANTALON':    '👖',
+            'COURONNE2':   '🎖️',
+            'MÉDAILLE':    '🏅',
+            'TROPHÉE':     '🏆',
+            'FOOTBALL':    '⚽',
+            'BASKET':      '🏀',
+            'TENNIS':      '🎾',
+            'BASEBALL':    '⚾',
+            'RUGBY':       '🏈',
+            'GOLF':        '⛳',
+            'PISCINE':     '🏊',
+            'SURF':        '🏄',
+            'SKI':         '⛷️',
+            'VÉLO2':       '🚵',
+            'BOXE':        '🥊',
+            'KARATÉ':      '🥋',
+
+            // Personnages & émotions
+            'ROBOT':       '🤖',
+            'FANTÔME':     '👻',
+            'MONSTRE':     '👾',
+            'ZOMBIE':      '🧟',
+            'FÉE':         '🧚',
+            'SORCIÈRE':    '🧙',
+            'VAMPIRE':     '🧛',
+            'PIRATE':      '🏴‍☠️',
+            'COWBOY':      '🤠',
+            'CLOWN':       '🤡',
+            'PÈRE NOËL':   '🎅',
+            'ALIEN':       '👽',
+            'LICORNE':     '🦄',
+            'SIRÈNE':      '🧜',
+        };
+
+        const DEFAULT_EMOJI = '🎨';
+
+        function getEmoji(mot) {
+            // Normalise : majuscules + suppression des accents pour comparaison souple
+            const key = mot.toUpperCase().trim();
+            return emojiMap[key] || DEFAULT_EMOJI;
+        }
+
+        // =====================================================
+
         let countdownInterval;
-        const TIME_LIMIT = 60; // Temps en secondes
-        let isTimerRunning = false; // Variable d'état pour le contrôle d'exécution
+        const TIME_LIMIT = 60;
+        let isTimerRunning = false;
 
         function startTimer() {
             const timerBox = document.getElementById('timer-box');
             const timerDisplay = document.getElementById('timer');
-            
-            let timeLeft = TIME_LIMIT;
-            isTimerRunning = true; // Déclaration de l'état actif
 
-            // Affichage et réinitialisation des styles
+            let timeLeft = TIME_LIMIT;
+            isTimerRunning = true;
+
             timerBox.style.display = 'block';
             timerBox.classList.remove('urgent');
             timerDisplay.textContent = `⏳ ${timeLeft}s`;
 
-            // Nettoyage de l'intervalle mémoire précédent
-            if (countdownInterval) {
-                clearInterval(countdownInterval);
-            }
+            if (countdownInterval) clearInterval(countdownInterval);
 
             countdownInterval = setInterval(() => {
                 timeLeft--;
                 timerDisplay.textContent = `⏳ ${timeLeft}s`;
 
-                // Déclenchement conditionnel de l'alerte CSS
                 if (timeLeft <= 10 && timeLeft > 0) {
                     timerBox.classList.add('urgent');
                 }
 
-                // Arrêt du cycle
                 if (timeLeft <= 0) {
                     clearInterval(countdownInterval);
                     timerDisplay.textContent = "⏱️ Temps écoulé !";
-                    isTimerRunning = false; // Autorise une relance au prochain appel
+                    isTimerRunning = false;
                 }
             }, 1000);
         }
 
         async function generateWord() {
-            const display = document.getElementById('word-display');
-            const btn = document.getElementById('btn');
+            const display  = document.getElementById('word-display');
+            const emojiEl  = document.getElementById('emoji-display');
+            const btn      = document.getElementById('btn');
             const timerBox = document.getElementById('timer-box');
 
             btn.disabled = true;
             display.classList.remove('pop');
+            emojiEl.classList.remove('pop');
             display.classList.add('hidden');
-            
-            // Masque l'élément DOM du minuteur uniquement s'il n'est pas actif
-            if (!isTimerRunning) {
-                timerBox.style.display = 'none';
-            }
+            emojiEl.classList.add('hidden');
+
+            if (!isTimerRunning) timerBox.style.display = 'none';
 
             try {
                 const response = await fetch('?action=get_word');
                 const data = await response.json();
 
                 setTimeout(() => {
+                    // Mot
                     display.textContent = data.mot;
                     display.classList.remove('hidden');
-                    void display.offsetWidth; // Force le reflow du navigateur
+                    void display.offsetWidth;
                     display.classList.add('pop');
+
+                    // Emoji
+                    emojiEl.textContent = getEmoji(data.mot);
+                    emojiEl.classList.remove('hidden');
+                    void emojiEl.offsetWidth;
+                    emojiEl.classList.add('pop');
+
                     btn.disabled = false;
 
-                    // Condition d'exécution pour ne pas écraser un décompte en cours
-                    if (!isTimerRunning) {
-                        startTimer();
-                    }
+                    if (!isTimerRunning) startTimer();
                 }, 200);
             } catch (error) {
-                display.textContent = "Erreur ";
+                display.textContent = "Erreur";
+                emojiEl.textContent = "😢";
                 display.classList.remove('hidden');
+                emojiEl.classList.remove('hidden');
                 btn.disabled = false;
             }
         }
