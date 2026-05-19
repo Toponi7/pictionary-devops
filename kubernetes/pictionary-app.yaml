@@ -10,7 +10,6 @@ data:
     USE pictionary;
     CREATE TABLE IF NOT EXISTS mots (id INT AUTO_INCREMENT PRIMARY KEY, mot VARCHAR(255) NOT NULL);
     INSERT INTO mots (mot) VALUES ('Chien'), ('Maison'), ('Voiture'), ('Tour Eiffel'), ('Ordinateur');
-
 ---
 # 2. Base de données : Déploiement et Service réseau
 apiVersion: apps/v1
@@ -47,18 +46,16 @@ spec:
       - name: init-script-volume
         configMap:
           name: db-init-script
-
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: db  # Ce nom est crucial, c'est le hostname que le PHP va utiliser (DB_HOST=db)
+  name: db
 spec:
   selector:
     app: mariadb
   ports:
     - port: 3306
-
 ---
 # 3. Serveur Web (PHP) : Déploiement et Service exposé
 apiVersion: apps/v1
@@ -66,10 +63,15 @@ kind: Deployment
 metadata:
   name: web
 spec:
-  replicas: 2 # On lance 2 instances du site web pour la haute disponibilité !
+  replicas: 2
   selector:
     matchLabels:
       app: web
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:
@@ -77,8 +79,22 @@ spec:
     spec:
       containers:
       - name: web
-        image: ghcr.io/toponi7/pictionary-devops:preprod-latest
+        image: ghcr.io/toponi7/pictionary-devops:latest
         imagePullPolicy: Always
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          failureThreshold: 3
         env:
         - name: DB_HOST
           value: "db"
@@ -88,7 +104,6 @@ spec:
           value: "utilisateur"
         - name: DB_PASS
           value: "motdepasse"
-
 ---
 apiVersion: v1
 kind: Service
