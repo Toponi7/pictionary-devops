@@ -4,14 +4,16 @@ on:
   push:
     branches:
       - main
+      - preprod # <-- Ajout de la branche de préproduction
     # Ne déclenche le build que si ces fichiers sont modifiés
     paths:
-      - 'src/index.php'
+      - 'src/**' # <-- Modifié pour inclure tout le dossier src, plus sûr que juste index.php
       - 'Dockerfile'
 
 env:
   REGISTRY: ghcr.io
-  # github.repository correspond à "TonNomUtilisateur/TonRepo"
+  # Assurez-vous que ce nom ne contient pas de majuscules. 
+  # Si github.repository plante, remplacez par : "votre-pseudo/pictionary-devops"
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
@@ -40,9 +42,16 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # Génère un tag "latest" pour la branche main, et un tag avec le SHA du commit
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            # --- Tags pour la Production (Branche main) ---
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=V${{ github.run_number }},enable=${{ github.ref == 'refs/heads/main' }}
+            
+            # --- Tags pour la Préproduction (Branche preprod) ---
+            type=raw,value=preprod-latest,enable=${{ github.ref == 'refs/heads/preprod' }}
+            type=raw,value=preprod-V${{ github.run_number }},enable=${{ github.ref == 'refs/heads/preprod' }}
+            
+            # --- Tag SHA (Commun aux deux environnements pour le rollback) ---
             type=sha
 
       - name: Build and push Docker image
