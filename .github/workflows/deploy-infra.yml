@@ -4,17 +4,18 @@ on:
   push:
     branches:
       - main
+      - preprod # <-- Déclenche le workflow sur les deux branches
     paths:
       - 'terraform/**'
-      - 'ansible/**' # <-- Ajouté pour déclencher aussi si vous modifiez Ansible
-  workflow_dispatch: # <-- Le fameux bouton manuel !
+      - 'ansible/**'
+  workflow_dispatch: # <-- Le bouton manuel !
 
 jobs:
   terraform-and-ansible:
     name: 'Terraform Provisioning & Ansible Configuration'
     runs-on: ubuntu-latest
     
-    # 1. On injecte TOUS les secrets OVH au niveau du job pour que Terraform puisse s'authentifier
+    # On injecte les secrets OVH au niveau du job pour que Terraform puisse s'authentifier
     env:
       OS_USERNAME: ${{ secrets.OS_USERNAME }}
       OS_PASSWORD: ${{ secrets.OS_PASSWORD }}
@@ -29,10 +30,15 @@ jobs:
         with:
           terraform_version: 1.5.0
 
-      - name: Terraform Init & Apply
+      - name: Terraform Init, Workspace & Apply
         run: |
           cd terraform
           terraform init
+          
+          # Sélectionne le workspace correspondant à la branche active (main ou preprod), ou le crée s'il n'existe pas
+          terraform workspace select ${{ github.ref_name }} || terraform workspace new ${{ github.ref_name }}
+          
+          # Exécute l'apply dans le bon workspace
           terraform apply -auto-approve
 
       # --- ÉTAPE PASSERELLE : RÉCUPÉRATION DE L'IP ---
@@ -40,6 +46,7 @@ jobs:
         id: get-ip
         run: |
           cd terraform
+          # Force Terraform à lire l'output du bon workspace sélectionné à l'étape précédente
           VM_IP=$(terraform output -raw instance_ip)
           echo "TARGET_IP=$VM_IP" >> $GITHUB_ENV
 
@@ -54,13 +61,17 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+          # On attend 10 secondes pour laisser le temps à l'OS d'initier le démon SSH après le boot de la VM
+          sleep 10
           ssh-keyscan -H ${{ env.TARGET_IP }} >> ~/.ssh/known_hosts
 
       - name: Exécution du Playbook Ansible
         run: |
+          # Passage des paramètres d'authentification GHCR via l'argument -e
           ansible-playbook -i "${{ env.TARGET_IP }}," \
             -u debian \
             --private-key ~/.ssh/id_rsa \
+            -e "ghcr_username=${{ github.actor }} ghcr_password=${{ secrets.GHCR_PAT }}" \
             ansible/playbook.yml
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
