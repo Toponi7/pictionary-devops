@@ -77,7 +77,7 @@ spec:
     spec:
       containers:
       - name: web
-        image: ghcr.io/salim-nejdi/pictionary-web:v2
+        image: ghcr.io/salim-nejdi/pictionary-web:latest
         imagePullPolicy: Always
         env:
         - name: DB_HOST
