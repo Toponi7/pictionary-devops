@@ -70,12 +70,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ansible
 
-      - name: Configuration de la clé SSH privée
+      - name: Configuration de la clé SSH privée et attente du serveur
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          sleep 10
+          
+          echo "⌛ Attente de l'ouverture du port SSH sur ${{ env.TARGET_IP }} (Timeout 5 minutes)..."
+          timeout 300 bash -c '
+            until nc -z -w3 ${{ env.TARGET_IP }} 22; do
+              sleep 5
+            done
+          '
+          
+          # Une fois le port ouvert, on récupère la clé d'hôte
           ssh-keyscan -H ${{ env.TARGET_IP }} >> ~/.ssh/known_hosts
 
       - name: Exécution du Playbook Ansible
