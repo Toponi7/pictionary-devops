@@ -1,54 +1,27 @@
-name: Build and Push Docker Image to GHCR
-
 on:
   push:
     branches:
       - main
-    # Ne déclenche le build que si ces fichiers sont modifiés
+      - preprod
     paths:
-      - 'src/index.php'
+      - 'src/**'
       - 'Dockerfile'
 
-env:
-  REGISTRY: ghcr.io
-  # github.repository correspond à "TonNomUtilisateur/TonRepo"
-  IMAGE_NAME: ${{ github.repository }}
-
-jobs:
-  build-and-push-image:
-    runs-on: ubuntu-latest
-    
-    # Ces permissions sont OBLIGATOIRES pour que le bot GitHub puisse pousser l'image
-    permissions:
-      contents: read
-      packages: write 
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Log in to the Container registry (GHCR)
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          # Le GITHUB_TOKEN est généré automatiquement par GitHub, pas besoin de le créer manuellement !
-          password: ${{ secrets.GITHUB_TOKEN }}
+# ...
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # Génère un tag "latest" pour la branche main, et un tag avec le SHA du commit
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            # Tags pour la production (branche main)
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=V${{ github.run_number }},enable=${{ github.ref == 'refs/heads/main' }}
+            
+            # Tags pour la préproduction (branche preprod)
+            type=raw,value=preprod-latest,enable=${{ github.ref == 'refs/heads/preprod' }}
+            type=raw,value=preprod-V${{ github.run_number }},enable=${{ github.ref == 'refs/heads/preprod' }}
+            
+            # Tag SHA commun
             type=sha
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
