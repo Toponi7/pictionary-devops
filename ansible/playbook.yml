@@ -59,8 +59,8 @@
         regexp: 'ghcr\.io/toponi7/pictionary-devops:[^\s]+'
         replace: 'ghcr.io/toponi7/pictionary-devops:{{ image_tag }}'
 
-      - name: Créer le secret pour accéder à GHCR
-      ansible.builtin.command: >
+    - name: Créer le secret pour accéder à GHCR
+      ansible.builtin.shell: >
         k3s kubectl create secret docker-registry ghcr-secret
         --docker-server=ghcr.io
         --docker-username={{ ghcr_username }}
@@ -73,12 +73,12 @@
       register: kubectl_apply
       changed_when: "'created' in kubectl_apply.stdout or 'configured' in kubectl_apply.stdout"
 
-    #- name: Vérification que le rolling update est terminé
-     # ansible.builtin.command: >
-      #  k3s kubectl rollout status deployment/web --timeout=180s
-      #register: rollout_status
-      #changed_when: false
-      #failed_when: rollout_status.rc != 0
+    - name: Vérification que le rolling update est terminé
+      ansible.builtin.command: >
+        k3s kubectl rollout status deployment/web --timeout=180s
+      register: rollout_status
+      changed_when: false
+      failed_when: rollout_status.rc != 0
 
     # =========================================================================
     # ÉTAPE 3 : INSTALLATION DE HELM
@@ -148,7 +148,6 @@
         --set write.replicas=0
         --set backend.replicas=0
         --set loki.useTestSchema=true
-
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       register: loki_install
