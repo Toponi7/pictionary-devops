@@ -138,6 +138,8 @@
         --set read.replicas=0
         --set write.replicas=0
         --set backend.replicas=0
+        --set loki.useTestSchema=true
+
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       register: loki_install
