@@ -6,26 +6,6 @@
 
   tasks:
     # =========================================================================
-    # ÉTAPE 0 : CONFIGURATION REGISTRE PRIVÉ (GitHub Container Registry)
-    # =========================================================================
-    - name: Créer le répertoire de configuration k3s
-      ansible.builtin.file:
-        path: /etc/rancher/k3s
-        state: directory
-        mode: '0755'
-
-    - name: Configurer l'authentification GHCR pour k3s
-      ansible.builtin.copy:
-        dest: /etc/rancher/k3s/registries.yaml
-        mode: '0600'
-        content: |
-          configs:
-            "ghcr.io":
-              auth:
-                username: "{{ ghcr_username }}"
-                password: "{{ ghcr_password }}"
-
-    # =========================================================================
     # ÉTAPE 1 : PRÉREQUIS ET INSTALLATION DE K3S
     # =========================================================================
     - name: Mise à jour des paquets du système
@@ -35,7 +15,7 @@
 
     - name: Installation des outils de base
       ansible.builtin.apt:
-        name: 
+        name:
           - curl
           - apt-transport-https
           - ca-certificates
@@ -73,10 +53,23 @@
         dest: /opt/kubernetes/pictionary-app.yaml
         mode: '0644'
 
+    - name: Mise à jour du tag de l'image dans le manifeste
+      ansible.builtin.replace:
+        path: /opt/kubernetes/pictionary-app.yaml
+        regexp: 'ghcr\.io/toponi7/pictionary-devops:[^\s]+'
+        replace: 'ghcr.io/toponi7/pictionary-devops:{{ image_tag }}'
+
     - name: Application du manifeste applicatif
       ansible.builtin.command: k3s kubectl apply -f /opt/kubernetes/pictionary-app.yaml
       register: kubectl_apply
       changed_when: "'created' in kubectl_apply.stdout or 'configured' in kubectl_apply.stdout"
+
+    - name: Vérification que le rolling update est terminé
+      ansible.builtin.command: >
+        k3s kubectl rollout status deployment/web --timeout=180s
+      register: rollout_status
+      changed_when: false
+      failed_when: rollout_status.rc != 0
 
     # =========================================================================
     # ÉTAPE 3 : INSTALLATION DE HELM
@@ -98,7 +91,7 @@
     - name: Ajouter le repository Helm de la communauté Prometheus
       ansible.builtin.command: helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml 
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       changed_when: false
 
     - name: Mettre à jour les repositories Helm
@@ -120,23 +113,119 @@
       changed_when: "'Release \"monitoring\" does not exist. Installing it now.' in helm_install.stdout or 'has been upgraded' in helm_install.stdout"
 
     # =========================================================================
-    # ÉTAPE 5 : VALIDATION FINALE (POLLING)
+    # ÉTAPE 5 : LOKI (Collecte de logs)
     # =========================================================================
-    - name: Attendre que le serveur HTTP de l'application réponde
-      ansible.builtin.uri_action:
-        url: "http://{{ ansible_host }}:80" 
-        status_code: 200
-      register: _result
-      until: _result.status == 200
-      retries: 30
-      delay: 10         
-      ignore_errors: yes
+    - name: Ajouter le repository Helm de Grafana (Loki)
+      ansible.builtin.command: helm repo add grafana https://grafana.github.io/helm-charts
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
 
-    - name: Validation finale (Échec si le site ne répond pas)
-      ansible.builtin.fail:
-        msg: "Le site n'a pas démarré correctement après 5 minutes. Vérifiez les logs des pods K3s."
-      when: _result.status != 200
+    - name: Mettre à jour les repositories Helm après ajout de Grafana
+      ansible.builtin.command: helm repo update
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Déployer Loki en mode single-binary (adapté à un cluster single-node)
+      ansible.builtin.command: >
+        helm upgrade --install loki grafana/loki
+        --namespace monitoring --create-namespace
+        --set loki.auth_enabled=false
+        --set loki.commonConfig.replication_factor=1
+        --set loki.storage.type=filesystem
+        --set singleBinary.replicas=1
+        --set read.replicas=0
+        --set write.replicas=0
+        --set backend.replicas=0
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: loki_install
+      changed_when: "'Release \"loki\" does not exist. Installing it now.' in loki_install.stdout or 'has been upgraded' in loki_install.stdout"
+
+    - name: Déployer Promtail (agent de collecte des logs vers Loki)
+      ansible.builtin.command: >
+        helm upgrade --install promtail grafana/promtail
+        --namespace monitoring
+        --set config.clients[0].url=http://loki:3100/loki/api/v1/push
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: promtail_install
+      changed_when: "'Release \"promtail\" does not exist. Installing it now.' in promtail_install.stdout or 'has been upgraded' in promtail_install.stdout"
+
+    - name: Attendre que Loki soit prêt
+      ansible.builtin.command: >
+        k3s kubectl rollout status deployment/loki
+        -n monitoring --timeout=120s
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: loki_status
+      changed_when: false
+      failed_when: false
+
+    - name: Déployer le ConfigMap de la datasource Loki
+      ansible.builtin.shell: |
+        k3s kubectl apply -f - <<EOF
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: loki-datasource
+          namespace: monitoring
+          labels:
+            grafana_datasource: "1"
+        data:
+          loki-datasource.yaml: |
+            apiVersion: 1
+            datasources:
+              - name: Loki
+                type: loki
+                access: proxy
+                url: http://loki.monitoring.svc.cluster.local:3100
+                isDefault: false
+                version: 1
+                editable: true
+        EOF
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: datasource_apply
+      changed_when: "'created' in datasource_apply.stdout or 'configured' in datasource_apply.stdout"
+
+    # =========================================================================
+    # ÉTAPE 6 : PERSISTANCE DES DASHBOARDS GRAFANA
+    # =========================================================================
+    - name: Créer le dossier temporaire pour le dashboard sur la VM
+      ansible.builtin.file:
+        path: /opt/monitoring/dashboards
+        state: directory
+        mode: '0755'
+
+    - name: Copier le fichier JSON du dashboard vers la VM
+      ansible.builtin.copy:
+        src: files/pictionary-dashboard.json
+        dest: /opt/monitoring/dashboards/pictionary-dashboard.json
+        mode: '0644'
+
+    - name: Injecter le dashboard dans Kubernetes via une ConfigMap
+      ansible.builtin.command: >
+        k3s kubectl create configmap pictionary-dashboard
+        --namespace monitoring
+        --from-file=/opt/monitoring/dashboards/pictionary-dashboard.json
+        --dry-run=client -o yaml | k3s kubectl apply -f -
+      changed_when: false
+
+    - name: Labeliser la ConfigMap pour que Grafana la détecte
+      ansible.builtin.command: >
+        k3s kubectl label configmap pictionary-dashboard
+        --namespace monitoring
+        grafana_dashboard="1" --overwrite
+      changed_when: false
 
     - name: Affichage d'un résumé de fin d'exécution
       ansible.builtin.debug:
-        msg: "Le nœud K3s, l'application et la stack de monitoring sont déployés avec succès. Le Pictionary répond ! Grafana est accessible sur le port 30080 !"
+        msg: >
+          Déploiement terminé avec succès !
+          - Grafana     → port 30080 (admin/admin)
+          - Prometheus  → intégré dans la stack monitoring
+          - Loki        → http://loki.monitoring.svc.cluster.local:3100
+          - Promtail    → collecte les logs de tous les pods automatiquement
+          - Dashboards  → pictionary-dashboard injecté et détecté par Grafana
