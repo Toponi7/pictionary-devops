@@ -10,7 +10,7 @@ on:
       - 'ansible/**'
   workflow_dispatch:
   
-  # 👇 NOUVEAU BLOC : Écoute le workflow Docker 👇
+  # 👇 Écoute le workflow Docker 👇
   workflow_run:
     workflows: ["Build and Push Docker Image to GHCR"] # Doit correspondre EXACTEMENT au "name:" du docker-build.yml
     types:
@@ -24,17 +24,21 @@ jobs:
     runs-on: ubuntu-latest
     
     # 👇 SÉCURITÉ : On ne déploie que si le workflow précédent a RÉUSSI 👇
-    # (Ou si on lance le script manuellement / via un push sur terraform/ansible)
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     
     env:
       OS_USERNAME: ${{ secrets.OS_USERNAME }}
       OS_PASSWORD: ${{ secrets.OS_PASSWORD }}
       OS_DOMAIN_NAME: "Default"
-
+      # Détermination conditionnelle de la branche cible selon le type d'événement
+      TARGET_ENV: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
+      
     steps:
       - name: Checkout du code
         uses: actions/checkout@v4
+        with:
+          # Spécification explicite de la branche à récupérer
+          ref: ${{ env.TARGET_ENV }}
 
       - name: Installation de Terraform
         uses: hashicorp/setup-terraform@v3
@@ -46,9 +50,8 @@ jobs:
           cd terraform
           terraform init
           
-          # Sélectionne le workspace correspondant à la branche active (main ou preprod), ou le crée s'il n'existe pas
-          # Note: Lors d'un workflow_run, github.ref_name contiendra bien la branche d'origine (preprod)
-          terraform workspace select ${{ github.ref_name }} || terraform workspace new ${{ github.ref_name }}
+          # Sélectionne le workspace correspondant à la branche active ciblée, ou le crée s'il n'existe pas
+          terraform workspace select ${{ env.TARGET_ENV }} || terraform workspace new ${{ env.TARGET_ENV }}
           
           # Exécute l'apply dans le bon workspace
           terraform apply -auto-approve
