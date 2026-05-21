@@ -8,10 +8,9 @@ on:
     paths:
       - 'terraform/**'
       - 'ansible/**'
-      
+
   workflow_dispatch:
-  
-  # Écoute le workflow Docker
+
   workflow_run:
     workflows: ["Build and Push Docker Image to GHCR"]
     types:
@@ -23,16 +22,15 @@ jobs:
   terraform-and-ansible:
     name: 'Terraform Provisioning & Ansible Configuration'
     runs-on: ubuntu-latest
-    
-    # SÉCURITÉ : On ne déploie que si le workflow précédent a RÉUSSI
+
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
-    
+
     env:
       OS_USERNAME: ${{ secrets.OS_USERNAME }}
       OS_PASSWORD: ${{ secrets.OS_PASSWORD }}
       OS_DOMAIN_NAME: "Default"
       TARGET_ENV: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
-      
+
     steps:
       - name: Checkout du code
         uses: actions/checkout@v4
@@ -68,7 +66,7 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          
+
           echo "⌛ Attente de l'ouverture du port SSH sur ${{ env.TARGET_IP }}..."
           timeout 300 bash -c '
             until nc -z -w3 ${{ env.TARGET_IP }} 22; do
@@ -84,10 +82,23 @@ jobs:
           [staging_nodes]
           ${{ env.TARGET_IP }} ansible_user=debian ansible_ssh_private_key_file=~/.ssh/id_rsa
           EOF
-          
-          echo "🚀 Lancement d'Ansible..."
+
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            # Déclenché après un build applicatif -> On utilise le SHA de l'image fraîchement construite
+            IMAGE_TAG="sha-$(echo '${{ github.event.workflow_run.head_sha }}' | cut -c1-7)"
+          else
+            # Déclenché par un push sur terraform/ansible -> On utilise la dernière image stable de la branche
+            if [ "${{ env.TARGET_ENV }}" = "main" ]; then
+              IMAGE_TAG="latest"
+            else
+              IMAGE_TAG="preprod-latest"
+            fi
+          fi
+
+          echo "🚀 Lancement d'Ansible avec le tag image : $IMAGE_TAG"
           ansible-playbook -i ansible/inventory.ini \
             -e "ghcr_username=${{ github.actor }} ghcr_password=${{ secrets.GITHUB_TOKEN }}" \
+            -e "image_tag=$IMAGE_TAG" \
             ansible/playbook.yml
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
