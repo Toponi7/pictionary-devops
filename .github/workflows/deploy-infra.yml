@@ -84,9 +84,15 @@ jobs:
           EOF
 
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            # Déclenché après un build applicatif -> On utilise le SHA de l'image fraîchement construite
             IMAGE_TAG="sha-$(echo '${{ github.event.workflow_run.head_sha }}' | cut -c1-7)"
           else
-            IMAGE_TAG="sha-$(echo '${{ github.sha }}' | cut -c1-7)"
+            # Déclenché par un push sur terraform/ansible -> On utilise la dernière image stable de la branche
+            if [ "${{ env.TARGET_ENV }}" = "main" ]; then
+              IMAGE_TAG="latest"
+            else
+              IMAGE_TAG="preprod-latest"
+            fi
           fi
 
           echo "🚀 Lancement d'Ansible avec le tag image : $IMAGE_TAG"
