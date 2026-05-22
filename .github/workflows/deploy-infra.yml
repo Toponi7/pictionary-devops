@@ -149,6 +149,7 @@ jobs:
           
           echo "🚨 Échec du Smoke Test : Impossible d'obtenir un code HTTP 200 en $TIMEOUT secondes."
           exit 1
+      
 
       - name: Validation 3 - Analyse des logs applicatifs
         run: |
@@ -163,3 +164,14 @@ jobs:
             fi
             echo "✅ Analyse des logs conforme : Aucun motif d'erreur critique détecté."
           EOF
+
+      - name: Déclenchement du workflow de promotion en production
+        if: success() && env.TARGET_ENV == 'preprod'
+        run: |
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/promote-to-production.yml/dispatches \
+            -d '{"ref":"main"}'
+  
+
