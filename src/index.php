@@ -574,7 +574,7 @@ if (isset($_GET['action']) && $_GET['action'] == 'get_word') {
                     if (!isTimerRunning) startTimer();
                 }, 200);
             } catch (error) {
-                display.textContent = "Erreurs";
+                display.textContent = "Erreur";
                 emojiEl.textContent = "😢";
                 display.classList.remove('hidden');
                 emojiEl.classList.remove('hidden');
