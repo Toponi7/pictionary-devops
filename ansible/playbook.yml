@@ -249,33 +249,40 @@
       changed_when: "'created' in datasource_apply.stdout or 'configured' in datasource_apply.stdout"
 
     # =========================================================================
-    # ÉTAPE 6 : PERSISTANCE DES DASHBOARDS GRAFANA
+    # ÉTAPE 6 : PERSISTANCE DES DASHBOARDS GRAFANA (VERSION OPTIMISÉE)
     # =========================================================================
-    - name: Créer le dossier temporaire pour le dashboard sur la VM
+    - name: Nettoyer et recréer le dossier des dashboards sur la VM
       ansible.builtin.file:
         path: /opt/monitoring/dashboards
-        state: directory
+        state: "{{ item }}"
         mode: '0755'
+      loop:
+        - absent
+        - directory
 
-    - name: Copier le fichier JSON du dashboard vers la VM
+    - name: Copier TOUS les fichiers JSON des dashboards vers la VM
       ansible.builtin.copy:
-        src: files/pictionary-dashboard.json
-        dest: /opt/monitoring/dashboards/pictionary-dashboard.json
+        src: files/dashboards/  # Note le '/' à la fin pour copier le contenu du dossier
+        dest: /opt/monitoring/dashboards/
         mode: '0644'
 
-    - name: Injecter le dashboard dans Kubernetes via une ConfigMap
+    - name: Injecter les dashboards dans Kubernetes via une ConfigMap globale
       ansible.builtin.shell: >
-        k3s kubectl create configmap pictionary-dashboard
+        k3s kubectl create configmap grafana-custom-dashboards
         --namespace monitoring
-        --from-file=/opt/monitoring/dashboards/pictionary-dashboard.json
+        --from-file=/opt/monitoring/dashboards/
         --dry-run=client -o yaml | k3s kubectl apply -f -
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       changed_when: false
 
-    - name: Labeliser la ConfigMap pour que Grafana la détecte
+    - name: Labeliser la ConfigMap pour que le sidecar de Grafana charge les fichiers
       ansible.builtin.command: >
-        k3s kubectl label configmap pictionary-dashboard
+        k3s kubectl label configmap grafana-custom-dashboards
         --namespace monitoring
         grafana_dashboard="1" --overwrite
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       changed_when: false
 
     - name: Affichage d'un résumé de fin d'exécution
@@ -284,6 +291,6 @@
           Déploiement terminé avec succès !
           - Grafana     → port 30080 (admin/admin)
           - Prometheus  → intégré dans la stack monitoring
-          - Loki        → http://loki.monitoring.svc.cluster.local:3100
+          - Loki        → http://loki-gateway.monitoring.svc.cluster.local:80
           - Promtail    → collecte les logs de tous les pods automatiquement
-          - Dashboards  → pictionary-dashboard injecté et détecté par Grafana
+          - Dashboards  → custom dashboards injectés et détectés par Grafana
