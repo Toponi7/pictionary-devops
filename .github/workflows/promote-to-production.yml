@@ -1,0 +1,235 @@
+name: Promote to Production
+
+on:
+  workflow_run:
+    workflows: ["Deploy Infrastructure"]
+    types:
+      - completed
+    branches:
+      - preprod
+
+jobs:
+  promote:
+    name: 'Promotion Preprod → Production'
+    runs-on: ubuntu-latest
+    environment: production
+
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      REGISTRY: ghcr.io
+      OS_USERNAME: ${{ secrets.OS_USERNAME }}
+      OS_PASSWORD: ${{ secrets.OS_PASSWORD }}
+      OS_DOMAIN_NAME: "Default"
+
+    steps:
+      - name: Checkout du code (branche main)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # =======================================================================
+      # ÉTAPE 1 : Récupérer le SHA et normaliser le nom de l'image
+      # =======================================================================
+      - name: Récupération du SHA de l'image preprod validée
+        id: get-sha
+        run: |
+          COMMIT_SHA="${{ github.event.workflow_run.head_sha }}"
+          SHORT_SHA=$(echo "$COMMIT_SHA" | cut -c1-7)
+          IMAGE_SHA_TAG="sha-${SHORT_SHA}"
+
+          echo "COMMIT_SHA=$COMMIT_SHA"         >> $GITHUB_ENV
+          echo "IMAGE_SHA_TAG=$IMAGE_SHA_TAG"   >> $GITHUB_ENV
+
+          echo "ℹ️ Image source : ghcr.io/toponi7/pictionary-devops:preprod-latest"
+
+      # =======================================================================
+      # ÉTAPE 2 : Sauvegarder le tag "latest" actuel pour rollback éventuel
+      # =======================================================================
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sauvegarder le tag latest actuel (pour rollback)
+        id: save-previous
+        run: |
+          PREVIOUS_DIGEST=$(docker manifest inspect \
+            ghcr.io/toponi7/pictionary-devops:latest \
+            2>/dev/null | jq -r '.config.digest // empty' || echo "")
+
+          if [ -n "$PREVIOUS_DIGEST" ]; then
+            echo "PREVIOUS_DIGEST=$PREVIOUS_DIGEST" >> $GITHUB_ENV
+            echo "previous_exists=true"             >> $GITHUB_OUTPUT
+            echo "✅ Tag latest actuel sauvegardé : $PREVIOUS_DIGEST"
+          else
+            echo "previous_exists=false"            >> $GITHUB_OUTPUT
+            echo "ℹ️ Aucun tag latest existant (premier déploiement)."
+          fi
+
+      # =======================================================================
+      # ÉTAPE 3 : Re-tag → promouvoir preprod-latest en "latest"
+      # =======================================================================
+      - name: Promotion de l'image (preprod-latest → latest)
+        run: |
+          SOURCE_IMAGE="ghcr.io/toponi7/pictionary-devops:preprod-latest"
+          TARGET_IMAGE="ghcr.io/toponi7/pictionary-devops:latest"
+
+          echo "🚀 Promotion : $SOURCE_IMAGE → $TARGET_IMAGE"
+
+          docker buildx imagetools create \
+            --tag "$TARGET_IMAGE" \
+            "$SOURCE_IMAGE"
+
+          echo "✅ Image promue avec succès."
+
+      # =======================================================================
+      # ÉTAPE 4 : Infrastructure prod via Terraform (workspace main)
+      # =======================================================================
+      - name: Installation de Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Init, workspace main & Apply
+        run: |
+          cd terraform
+          terraform init
+          terraform workspace select main || terraform workspace new main
+          terraform apply -auto-approve
+
+      - name: Extraction de l'IP du serveur prod
+        id: get-ip
+        run: |
+          cd terraform
+          VM_IP=$(terraform output -raw instance_ip)
+          echo "TARGET_IP=$VM_IP" >> $GITHUB_ENV
+
+      # =======================================================================
+      # ÉTAPE 5 : Déploiement Ansible sur la VM prod
+      # =======================================================================
+      - name: Installation d'Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible
+
+      - name: Configuration SSH et attente du serveur
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          echo "⌛ Attente du port SSH sur ${{ env.TARGET_IP }}..."
+          timeout 300 bash -c '
+            until nc -z -w3 ${{ env.TARGET_IP }} 22; do
+              sleep 5
+            done
+          '
+          ssh-keyscan -H ${{ env.TARGET_IP }} >> ~/.ssh/known_hosts
+
+      - name: Exécution du Playbook Ansible (prod)
+        run: |
+          cat <<EOF > ansible/inventory.ini
+          [staging_nodes]
+          ${{ env.TARGET_IP }} ansible_user=debian ansible_ssh_private_key_file=~/.ssh/id_rsa
+          EOF
+
+          echo "🚀 Déploiement de l'image : latest"
+          ansible-playbook -i ansible/inventory.ini \
+            -e "ghcr_username=${{ github.actor }} ghcr_password=${{ secrets.GITHUB_TOKEN }}" \
+            -e "image_tag=latest" \
+            ansible/playbook.yml
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+
+      # =======================================================================
+      # ÉTAPE 6 : VALIDATIONS PROD
+      # =======================================================================
+      - name: Validation 1 - Stabilité des pods prod
+        id: validation-pods
+        run: |
+          ssh -o StrictHostKeyChecking=no debian@${{ env.TARGET_IP }} << 'EOF'
+            echo "=== Attente du rollout prod ==="
+            sudo k3s kubectl rollout status deployment/web --timeout=300s
+
+            echo "=== Vérification des redémarrages ==="
+            RESTARTS=$(sudo k3s kubectl get pods -l app=web \
+              -o jsonpath='{.items[*].status.containerStatuses[*].restartCount}')
+            for count in $RESTARTS; do
+              if [ "$count" -ne 0 ]; then
+                echo "🚨 Conteneur instable (redémarrages: $count)"
+                exit 1
+              fi
+            done
+            echo "✅ Pods stables."
+          EOF
+
+      - name: Validation 2 - Smoke Test HTTP prod
+        id: validation-http
+        run: |
+          URL="http://${{ env.TARGET_IP }}"
+          for i in $(seq 1 12); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
+            echo "Tentative $i → HTTP $HTTP_CODE"
+            [ "$HTTP_CODE" -eq 200 ] && echo "✅ HTTP 200 OK." && exit 0
+            sleep 5
+          done
+          echo "🚨 Smoke test échoué."
+          exit 1
+
+      - name: Validation 3 - Analyse des logs prod
+        id: validation-logs
+        run: |
+          ssh -o StrictHostKeyChecking=no debian@${{ env.TARGET_IP }} << 'EOF'
+            LOGS=$(sudo k3s kubectl logs -l app=web --tail=200)
+            if echo "$LOGS" | grep -Ei 'exception|fatal error|sql error|stack trace|connection refused'; then
+              echo "🚨 Erreurs critiques détectées dans les logs."
+              exit 1
+            fi
+            echo "✅ Logs conformes."
+          EOF
+
+      # =======================================================================
+      # ÉTAPE 7 : ROLLBACK AUTOMATIQUE
+      # =======================================================================
+      - name: Rollback automatique (si échec des validations)
+        if: failure() && (steps.validation-pods.outcome == 'failure' || steps.validation-http.outcome == 'failure' || steps.validation-logs.outcome == 'failure')
+        run: |
+          echo "🔴 Validation échouée — déclenchement du rollback automatique."
+
+          if [ "${{ steps.save-previous.outputs.previous_exists }}" = "true" ]; then
+            echo "⏪ Restauration du digest précédent : ${{ env.PREVIOUS_DIGEST }}"
+
+            docker buildx imagetools create \
+              --tag "ghcr.io/toponi7/pictionary-devops:latest" \
+              "ghcr.io/toponi7/pictionary-devops@${{ env.PREVIOUS_DIGEST }}"
+
+            ansible-playbook -i ansible/inventory.ini \
+              -e "ghcr_username=${{ github.actor }} ghcr_password=${{ secrets.GITHUB_TOKEN }}" \
+              -e "image_tag=latest" \
+              ansible/playbook.yml
+
+            echo "✅ Rollback appliqué."
+          else
+            echo "⚠️ Aucune version précédente disponible. Rollback impossible."
+            echo "Action requise : intervenez manuellement sur la VM prod (${{ env.TARGET_IP }})."
+          fi
+
+      # =======================================================================
+      # RÉSUMÉ FINAL
+      # =======================================================================
+      - name: Résumé du déploiement
+        if: success()
+        run: |
+          echo "================================================="
+          echo "✅  PRODUCTION DÉPLOYÉE AVEC SUCCÈS"
+          echo "  Image     : ghcr.io/toponi7/pictionary-devops:latest"
+          echo "  VM prod   : ${{ env.TARGET_IP }}"
+          echo "  Grafana   : http://${{ env.TARGET_IP }}:30080"
+          echo "================================================="
