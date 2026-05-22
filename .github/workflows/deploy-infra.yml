@@ -102,3 +102,64 @@ jobs:
             ansible/playbook.yml
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
+
+
+# =========================================================================
+      # PHASE DE VALIDATION AUTOMATISÉE (TESTS DE PREPROD)
+      # =========================================================================
+
+      - name: Validation 1 - Statut et Redémarrages des Pods K3s
+        run: |
+          ssh -o StrictHostKeyChecking=no debian@${{ env.TARGET_IP }} << 'EOF'
+            echo "=== Attente de l'état Ready du déploiement web ==="
+            sudo k3s kubectl rollout status deployment/web --timeout=180s
+            
+            echo "=== Vérification des compteurs de redémarrage ==="
+            RESTARTS=$(sudo k3s kubectl get pods -l app=web -o jsonpath='{.items[*].status.containerStatuses[*].restartCount}')
+            echo "Données de redémarrage des conteneurs : $RESTARTS"
+            
+            for count in $RESTARTS; do
+              if [ "$count" -ne 0 ]; then
+                echo "🚨 Erreur de stabilité : Un conteneur a redémarré ($count fois)."
+                exit 1
+              fi
+            done
+            echo "✅ Tous les conteneurs sont stables (RESTARTS: 0)."
+          EOF
+
+      - name: Validation 2 - Smoke Test (HTTP 200)
+        run: |
+          echo "=== Lancement du Smoke Test HTTP ==="
+          URL="http://${{ env.TARGET_IP }}"
+          TIMEOUT=60
+          ELAPSED=0
+          
+          until [ $ELAPSED -ge $TIMEOUT ]; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
+            echo "Requête vers $URL -> Code HTTP reçu : $HTTP_CODE"
+            
+            if [ "$HTTP_CODE" -eq 200 ]; then
+              echo "✅ Smoke Test réussi : L'application répond avec un code HTTP 200."
+              exit 0
+            fi
+            
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+          
+          echo "🚨 Échec du Smoke Test : Impossible d'obtenir un code HTTP 200 en $TIMEOUT secondes."
+          exit 1
+
+      - name: Validation 3 - Analyse des logs applicatifs
+        run: |
+          ssh -o StrictHostKeyChecking=no debian@${{ env.TARGET_IP }} << 'EOF'
+            echo "=== Analyse des 200 dernières lignes de logs du serveur Web ==="
+            LOGS=$(sudo k3s kubectl logs -l app=web --tail=200)
+            
+            # Recherche de patterns d'erreurs critiques (insensible à la casse)
+            if echo "$LOGS" | grep -Ei 'exception|fatal error|sql error|stack trace|connection refused'; then
+              echo "🚨 Erreur : Des anomalies critiques ont été détectées dans les logs de l'application."
+              exit 1
+            fi
+            echo "✅ Analyse des logs conforme : Aucun motif d'erreur critique détecté."
+          EOF
