@@ -185,6 +185,7 @@
       ansible.builtin.command: >
         helm upgrade --install loki grafana/loki
         --namespace monitoring --create-namespace
+        --set deploymentMode=SingleBinary
         --set loki.auth_enabled=false
         --set loki.commonConfig.replication_factor=1
         --set loki.storage.type=filesystem
@@ -192,6 +193,8 @@
         --set read.replicas=0
         --set write.replicas=0
         --set backend.replicas=0
+        --set chunksCache.enabled=false
+        --set resultsCache.enabled=false
         --set loki.useTestSchema=true
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
