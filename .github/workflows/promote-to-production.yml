@@ -47,7 +47,7 @@ jobs:
           echo "IMAGE_SHA_TAG=$IMAGE_SHA_TAG"       >> $GITHUB_ENV
           echo "IMAGE_NAME_LOWER=$IMAGE_NAME_LOWER" >> $GITHUB_ENV
 
-          echo "ℹ️ Image validée en preprod : ${{ env.REGISTRY }}/${IMAGE_NAME_LOWER}:${IMAGE_SHA_TAG}"
+          echo "ℹ️ Image validée en preprod : ghcr.io/${IMAGE_NAME_LOWER}:${IMAGE_SHA_TAG}"
 
       # =======================================================================
       # ÉTAPE 2 : Sauvegarder le tag "latest" actuel pour rollback éventuel
@@ -62,8 +62,10 @@ jobs:
       - name: Sauvegarder le tag latest actuel (pour rollback)
         id: save-previous
         run: |
+          IMAGE_NAME_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+
           PREVIOUS_DIGEST=$(docker manifest inspect \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:latest \
+            ghcr.io/${IMAGE_NAME_LOWER}:latest \
             2>/dev/null | jq -r '.config.digest // empty' || echo "")
 
           if [ -n "$PREVIOUS_DIGEST" ]; then
@@ -80,8 +82,9 @@ jobs:
       # =======================================================================
       - name: Promotion de l'image (preprod SHA → latest)
         run: |
-          SOURCE_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:${{ env.IMAGE_SHA_TAG }}"
-          TARGET_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:latest"
+          IMAGE_NAME_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          SOURCE_IMAGE="ghcr.io/${IMAGE_NAME_LOWER}:${{ env.IMAGE_SHA_TAG }}"
+          TARGET_IMAGE="ghcr.io/${IMAGE_NAME_LOWER}:latest"
 
           echo "🚀 Promotion : $SOURCE_IMAGE → $TARGET_IMAGE"
 
@@ -203,14 +206,16 @@ jobs:
       - name: Rollback automatique (si échec des validations)
         if: failure() && (steps.validation-pods.outcome == 'failure' || steps.validation-http.outcome == 'failure' || steps.validation-logs.outcome == 'failure')
         run: |
+          IMAGE_NAME_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+
           echo "🔴 Validation échouée — déclenchement du rollback automatique."
 
           if [ "${{ steps.save-previous.outputs.previous_exists }}" = "true" ]; then
             echo "⏪ Restauration du digest précédent : ${{ env.PREVIOUS_DIGEST }}"
 
             docker buildx imagetools create \
-              --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:latest" \
-              "${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}@${{ env.PREVIOUS_DIGEST }}"
+              --tag "ghcr.io/${IMAGE_NAME_LOWER}:latest" \
+              "ghcr.io/${IMAGE_NAME_LOWER}@${{ env.PREVIOUS_DIGEST }}"
 
             ansible-playbook -i ansible/inventory.ini \
               -e "ghcr_username=${{ github.actor }} ghcr_password=${{ secrets.GITHUB_TOKEN }}" \
@@ -229,9 +234,10 @@ jobs:
       - name: Résumé du déploiement
         if: success()
         run: |
+          IMAGE_NAME_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           echo "================================================="
           echo "✅  PRODUCTION DÉPLOYÉE AVEC SUCCÈS"
-          echo "  Image     : ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:latest"
+          echo "  Image     : ghcr.io/${IMAGE_NAME_LOWER}:latest"
           echo "  SHA src   : ${{ env.IMAGE_SHA_TAG }}"
           echo "  VM prod   : ${{ env.TARGET_IP }}"
           echo "  Grafana   : http://${{ env.TARGET_IP }}:30080"
