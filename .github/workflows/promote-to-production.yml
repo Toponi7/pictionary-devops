@@ -132,7 +132,7 @@ jobs:
         id: check-infra
         run: |
           cd terraform
-          VM_IP=$(terraform output -raw instance_ip 2>/dev/null || echo "")
+          VM_IP=$(terraform output -raw instance_ip 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || echo "")
           if [ -n "$VM_IP" ]; then
             echo "VM prod existante détectée : $VM_IP"
             echo "infra_exists=true"  >> $GITHUB_OUTPUT
