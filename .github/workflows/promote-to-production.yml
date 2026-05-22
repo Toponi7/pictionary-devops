@@ -91,65 +91,49 @@ jobs:
 
       # =======================================================================
       # ÉTAPE 4 : Infrastructure prod via Terraform (workspace main)
+      # Crée la VM uniquement si elle n'existe pas déjà
       # =======================================================================
       - name: Installation de Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.5.0
+          terraform_wrapper: false
 
-      - name: Terraform Init, workspace main & Apply
+      - name: Terraform Init & workspace main
         run: |
           cd terraform
           terraform init
           terraform workspace select main || terraform workspace new main
+
+      - name: Vérification si la VM prod existe déjà
+        id: check-infra
+        run: |
+          cd terraform
+          VM_IP=$(terraform output -raw instance_ip 2>/dev/null || echo "")
+          if [ -n "$VM_IP" ]; then
+            echo "VM prod existante détectée : $VM_IP"
+            echo "infra_exists=true"  >> $GITHUB_OUTPUT
+            echo "TARGET_IP=$VM_IP"   >> $GITHUB_ENV
+          else
+            echo "Aucune VM prod détectée, provisioning nécessaire."
+            echo "infra_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Terraform Apply (uniquement si VM absente)
+        if: steps.check-infra.outputs.infra_exists == 'false'
+        run: |
+          cd terraform
           terraform apply -auto-approve
 
-      - name: Extraction de l'IP du serveur prod
-        id: get-ip
+      - name: Extraction de l'IP après provisioning
+        if: steps.check-infra.outputs.infra_exists == 'false'
         run: |
           cd terraform
           VM_IP=$(terraform output -raw instance_ip)
           echo "TARGET_IP=$VM_IP" >> $GITHUB_ENV
 
       # =======================================================================
-      # ÉTAPE 5 : Déploiement Ansible sur la VM prod
-      # =======================================================================
-      - name: Installation d'Ansible
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ansible
-
-      - name: Configuration SSH et attente du serveur
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-
-          echo "⌛ Attente du port SSH sur ${{ env.TARGET_IP }}..."
-          timeout 300 bash -c '
-            until nc -z -w3 ${{ env.TARGET_IP }} 22; do
-              sleep 5
-            done
-          '
-          ssh-keyscan -H ${{ env.TARGET_IP }} >> ~/.ssh/known_hosts
-
-      - name: Exécution du Playbook Ansible (prod)
-        run: |
-          cat <<EOF > ansible/inventory.ini
-          [staging_nodes]
-          ${{ env.TARGET_IP }} ansible_user=debian ansible_ssh_private_key_file=~/.ssh/id_rsa
-          EOF
-
-          echo "🚀 Déploiement de l'image : latest"
-          ansible-playbook -i ansible/inventory.ini \
-            -e "ghcr_username=${{ github.actor }} ghcr_password=${{ secrets.GITHUB_TOKEN }}" \
-            -e "image_tag=latest" \
-            ansible/playbook.yml
-        env:
-          ANSIBLE_HOST_KEY_CHECKING: "False"
-
-      # =======================================================================
-      # ÉTAPE 6 : VALIDATIONS PROD
+      # ÉTAPE 5 : VALIDATIONS PROD
       # =======================================================================
       - name: Validation 1 - Stabilité des pods prod
         id: validation-pods
@@ -196,7 +180,7 @@ jobs:
           EOF
 
       # =======================================================================
-      # ÉTAPE 7 : ROLLBACK AUTOMATIQUE
+      # ÉTAPE 6 : ROLLBACK AUTOMATIQUE
       # =======================================================================
       - name: Rollback automatique (si échec des validations)
         if: failure() && (steps.validation-pods.outcome == 'failure' || steps.validation-http.outcome == 'failure' || steps.validation-logs.outcome == 'failure')
