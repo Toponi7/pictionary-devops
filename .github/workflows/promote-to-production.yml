@@ -1,6 +1,8 @@
 name: Promote to Production
 
 on:
+  workflow_dispatch:
+  # garde workflow_run uniquement pour les déclenchements manuels directs
   workflow_run:
     workflows: ["Deploy Infrastructure"]
     types:
