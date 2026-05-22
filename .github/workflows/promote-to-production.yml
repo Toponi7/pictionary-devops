@@ -9,32 +9,9 @@ on:
       - preprod
 
 jobs:
-
-  notify-discord:
-    name: 'Notification Discord — En attente de validation'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Envoyer la notification Discord
-        run: |
-          curl -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "embeds": [{
-                "title": "⏳ Promotion en attente de validation",
-                "description": "La préprod est déployée et validée.\nUne approbation manuelle est requise pour promouvoir en **production**.",
-                "color": 16776960,
-                "fields": [
-                  {"name": "Déclenché par", "value": "${{ github.actor }}", "inline": true},
-                  {"name": "Commit", "value": "`${{ github.event.workflow_run.head_sha }}`", "inline": true}
-                ],
-                "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-              }]
-            }'
-
   promote:
     name: 'Promotion Preprod → Production'
     runs-on: ubuntu-latest
-    needs: notify-discord
     environment: production
 
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
@@ -56,7 +33,7 @@ jobs:
           ref: main
 
       # =======================================================================
-      # ÉTAPE 1 : Récupérer le SHA et normaliser le nom de l'image
+      # ÉTAPE 1 : Récupérer le SHA de l'image preprod validée
       # =======================================================================
       - name: Récupération du SHA de l'image preprod validée
         id: get-sha
@@ -65,8 +42,8 @@ jobs:
           SHORT_SHA=$(echo "$COMMIT_SHA" | cut -c1-7)
           IMAGE_SHA_TAG="sha-${SHORT_SHA}"
 
-          echo "COMMIT_SHA=$COMMIT_SHA"         >> $GITHUB_ENV
-          echo "IMAGE_SHA_TAG=$IMAGE_SHA_TAG"   >> $GITHUB_ENV
+          echo "COMMIT_SHA=$COMMIT_SHA"       >> $GITHUB_ENV
+          echo "IMAGE_SHA_TAG=$IMAGE_SHA_TAG" >> $GITHUB_ENV
 
           echo "ℹ️ Image source : ghcr.io/toponi7/pictionary-devops:preprod-latest"
 
@@ -113,50 +90,106 @@ jobs:
           echo "✅ Image promue avec succès."
 
       # =======================================================================
-      # ÉTAPE 4 : Infrastructure prod via Terraform (workspace main)
-      # Crée la VM uniquement si elle n'existe pas déjà
+      # ÉTAPE 4 : Récupération de l'IP via OpenStack ou provisioning si absent
       # =======================================================================
-      - name: Installation de Terraform
+      - name: Installation du client OpenStack
+        run: pip install python-openstackclient --quiet
+
+      - name: Vérification si la VM prod existe via OpenStack
+        id: check-infra
+        run: |
+          VM_IP=$(openstack server show pictionary-prod-node-1 \
+            -f value -c addresses 2>/dev/null \
+            | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "")
+
+          if [ -n "$VM_IP" ]; then
+            echo "✅ VM prod existante détectée : $VM_IP"
+            echo "infra_exists=true"  >> $GITHUB_OUTPUT
+            echo "TARGET_IP=$VM_IP"   >> $GITHUB_ENV
+          else
+            echo "ℹ️ Aucune VM prod détectée, provisioning nécessaire."
+            echo "infra_exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          OS_AUTH_URL: https://auth.cloud.ovh.net/v3
+          OS_USERNAME: ${{ secrets.OS_USERNAME }}
+          OS_PASSWORD: ${{ secrets.OS_PASSWORD }}
+          OS_TENANT_NAME: "6633440012290193"
+          OS_DOMAIN_NAME: "Default"
+          OS_REGION_NAME: "BHS5"
+
+      - name: Installation de Terraform (si provisioning nécessaire)
+        if: steps.check-infra.outputs.infra_exists == 'false'
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.5.0
           terraform_wrapper: false
 
-      - name: Terraform Init & workspace main
+      - name: Terraform Init, workspace main & Apply (si provisioning nécessaire)
+        if: steps.check-infra.outputs.infra_exists == 'false'
         run: |
           cd terraform
           terraform init
           terraform workspace select main || terraform workspace new main
-
-      - name: Vérification si la VM prod existe déjà
-        id: check-infra
-        run: |
-          cd terraform
-          VM_IP=$(terraform output -raw instance_ip 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || echo "")
-          if [ -n "$VM_IP" ]; then
-            echo "VM prod existante détectée : $VM_IP"
-            echo "infra_exists=true"  >> $GITHUB_OUTPUT
-            echo "TARGET_IP=$VM_IP"   >> $GITHUB_ENV
-          else
-            echo "Aucune VM prod détectée, provisioning nécessaire."
-            echo "infra_exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Terraform Apply (uniquement si VM absente)
-        if: steps.check-infra.outputs.infra_exists == 'false'
-        run: |
-          cd terraform
           terraform apply -auto-approve
 
-      - name: Extraction de l'IP après provisioning
+      - name: Extraction de l'IP après provisioning Terraform
         if: steps.check-infra.outputs.infra_exists == 'false'
         run: |
-          cd terraform
-          VM_IP=$(terraform output -raw instance_ip)
+          VM_IP=$(openstack server show pictionary-prod-node-1 \
+            -f value -c addresses 2>/dev/null \
+            | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
           echo "TARGET_IP=$VM_IP" >> $GITHUB_ENV
+          echo "✅ Nouvelle VM provisionnée : $VM_IP"
+        env:
+          OS_AUTH_URL: https://auth.cloud.ovh.net/v3
+          OS_USERNAME: ${{ secrets.OS_USERNAME }}
+          OS_PASSWORD: ${{ secrets.OS_PASSWORD }}
+          OS_TENANT_NAME: "6633440012290193"
+          OS_DOMAIN_NAME: "Default"
+          OS_REGION_NAME: "BHS5"
 
       # =======================================================================
-      # ÉTAPE 5 : VALIDATIONS PROD
+      # ÉTAPE 5 : Déploiement Ansible sur la VM prod
+      # =======================================================================
+      - name: Installation d'Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible
+
+      - name: Configuration SSH et attente du serveur
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          echo "⌛ Attente du port SSH sur ${{ env.TARGET_IP }}..."
+          timeout 300 bash -c '
+            until nc -z -w3 ${{ env.TARGET_IP }} 22; do
+              echo "SSH pas encore disponible, nouvelle tentative dans 5s..."
+              sleep 5
+            done
+          '
+          echo "✅ SSH disponible."
+          ssh-keyscan -H ${{ env.TARGET_IP }} >> ~/.ssh/known_hosts
+
+      - name: Exécution du Playbook Ansible (prod)
+        run: |
+          cat <<EOF > ansible/inventory.ini
+          [staging_nodes]
+          ${{ env.TARGET_IP }} ansible_user=debian ansible_ssh_private_key_file=~/.ssh/id_rsa
+          EOF
+
+          echo "🚀 Déploiement de l'image : latest"
+          ansible-playbook -i ansible/inventory.ini \
+            -e "ghcr_username=${{ github.actor }} ghcr_password=${{ secrets.GITHUB_TOKEN }}" \
+            -e "image_tag=latest" \
+            ansible/playbook.yml
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+
+      # =======================================================================
+      # ÉTAPE 6 : VALIDATIONS PROD
       # =======================================================================
       - name: Validation 1 - Stabilité des pods prod
         id: validation-pods
@@ -203,7 +236,7 @@ jobs:
           EOF
 
       # =======================================================================
-      # ÉTAPE 6 : ROLLBACK AUTOMATIQUE
+      # ÉTAPE 7 : ROLLBACK AUTOMATIQUE
       # =======================================================================
       - name: Rollback automatique (si échec des validations)
         if: failure() && (steps.validation-pods.outcome == 'failure' || steps.validation-http.outcome == 'failure' || steps.validation-logs.outcome == 'failure')
