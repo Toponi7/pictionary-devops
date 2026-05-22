@@ -9,19 +9,19 @@ on:
       - preprod
 
 jobs:
-  # =========================================================================
-  # GATE : ne démarre que si le pipeline preprod a réussi
-  # =========================================================================
   promote:
     name: 'Promotion Preprod → Production'
     runs-on: ubuntu-latest
-    environment: production          # <-- déclenche la demande d'approbation manuelle
+    environment: production
 
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
 
+    permissions:
+      contents: read
+      packages: write
+
     env:
       REGISTRY: ghcr.io
-      IMAGE_NAME: ${{ github.repository }}
       OS_USERNAME: ${{ secrets.OS_USERNAME }}
       OS_PASSWORD: ${{ secrets.OS_PASSWORD }}
       OS_DOMAIN_NAME: "Default"
@@ -33,22 +33,21 @@ jobs:
           ref: main
 
       # =======================================================================
-      # ÉTAPE 1 : Récupérer le SHA de l'image preprod validée
+      # ÉTAPE 1 : Récupérer le SHA et normaliser le nom de l'image
       # =======================================================================
       - name: Récupération du SHA de l'image preprod validée
         id: get-sha
         run: |
-          # Le SHA est celui du commit qui a déclenché le pipeline preprod
           COMMIT_SHA="${{ github.event.workflow_run.head_sha }}"
           SHORT_SHA=$(echo "$COMMIT_SHA" | cut -c1-7)
           IMAGE_SHA_TAG="sha-${SHORT_SHA}"
-          # Conversion en lowercase obligatoire pour GHCR
           IMAGE_NAME_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          
-          echo "COMMIT_SHA=$COMMIT_SHA"         >> $GITHUB_ENV
-          echo "IMAGE_SHA_TAG=$IMAGE_SHA_TAG"   >> $GITHUB_ENV
-          echo "sha_tag=$IMAGE_SHA_TAG"         >> $GITHUB_OUTPUT
-          echo "ℹ️ Image validée en preprod : ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$IMAGE_SHA_TAG"
+
+          echo "COMMIT_SHA=$COMMIT_SHA"             >> $GITHUB_ENV
+          echo "IMAGE_SHA_TAG=$IMAGE_SHA_TAG"       >> $GITHUB_ENV
+          echo "IMAGE_NAME_LOWER=$IMAGE_NAME_LOWER" >> $GITHUB_ENV
+
+          echo "ℹ️ Image validée en preprod : ${{ env.REGISTRY }}/${IMAGE_NAME_LOWER}:${IMAGE_SHA_TAG}"
 
       # =======================================================================
       # ÉTAPE 2 : Sauvegarder le tag "latest" actuel pour rollback éventuel
@@ -63,12 +62,10 @@ jobs:
       - name: Sauvegarder le tag latest actuel (pour rollback)
         id: save-previous
         run: |
-          # On tente de récupérer le digest de l'image "latest" actuelle
-          # Si elle n'existe pas encore (premier déploiement), on continue sans erreur
           PREVIOUS_DIGEST=$(docker manifest inspect \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:latest \
             2>/dev/null | jq -r '.config.digest // empty' || echo "")
-          
+
           if [ -n "$PREVIOUS_DIGEST" ]; then
             echo "PREVIOUS_DIGEST=$PREVIOUS_DIGEST" >> $GITHUB_ENV
             echo "previous_exists=true"             >> $GITHUB_OUTPUT
@@ -80,21 +77,18 @@ jobs:
 
       # =======================================================================
       # ÉTAPE 3 : Re-tag → promouvoir sha-XXXXXXX en "latest"
-      # (Pas de rebuild : on réutilise exactement l'image validée en preprod)
       # =======================================================================
       - name: Promotion de l'image (preprod SHA → latest)
         run: |
           SOURCE_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:${{ env.IMAGE_SHA_TAG }}"
           TARGET_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:latest"
-          
+
           echo "🚀 Promotion : $SOURCE_IMAGE → $TARGET_IMAGE"
-          
-          # docker buildx imagetools crée un nouveau manifeste pointant sur la même image
-          # sans re-télécharger ou re-builder quoi que ce soit
+
           docker buildx imagetools create \
             --tag "$TARGET_IMAGE" \
             "$SOURCE_IMAGE"
-          
+
           echo "✅ Image promue avec succès."
 
       # =======================================================================
@@ -157,7 +151,7 @@ jobs:
           ANSIBLE_HOST_KEY_CHECKING: "False"
 
       # =======================================================================
-      # ÉTAPE 6 : VALIDATIONS PROD (identiques à preprod, seuils plus stricts)
+      # ÉTAPE 6 : VALIDATIONS PROD
       # =======================================================================
       - name: Validation 1 - Stabilité des pods prod
         id: validation-pods
@@ -204,7 +198,7 @@ jobs:
           EOF
 
       # =======================================================================
-      # ÉTAPE 7 : ROLLBACK AUTOMATIQUE (si une validation échoue)
+      # ÉTAPE 7 : ROLLBACK AUTOMATIQUE
       # =======================================================================
       - name: Rollback automatique (si échec des validations)
         if: failure() && (steps.validation-pods.outcome == 'failure' || steps.validation-http.outcome == 'failure' || steps.validation-logs.outcome == 'failure')
@@ -214,18 +208,16 @@ jobs:
           if [ "${{ steps.save-previous.outputs.previous_exists }}" = "true" ]; then
             echo "⏪ Restauration du digest précédent : ${{ env.PREVIOUS_DIGEST }}"
 
-            # Re-pointer le tag latest vers le digest sauvegardé
             docker buildx imagetools create \
               --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}:latest" \
               "${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LOWER }}@${{ env.PREVIOUS_DIGEST }}"
 
-            # Redéployer via Ansible avec le tag latest restauré
             ansible-playbook -i ansible/inventory.ini \
               -e "ghcr_username=${{ github.actor }} ghcr_password=${{ secrets.GITHUB_TOKEN }}" \
               -e "image_tag=latest" \
               ansible/playbook.yml
 
-            echo "✅ Rollback appliqué. Vérifiez l'état de la prod."
+            echo "✅ Rollback appliqué."
           else
             echo "⚠️ Aucune version précédente disponible. Rollback impossible."
             echo "Action requise : intervenez manuellement sur la VM prod (${{ env.TARGET_IP }})."
