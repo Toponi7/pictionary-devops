@@ -1,0 +1,45 @@
+name: Terraform Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environnement à détruire'
+        required: true
+        default: 'preprod'
+        type: choice
+        options:
+          - main
+          - preprod
+
+jobs:
+  terraform-destroy:
+    name: 'Terraform Destroy — ${{ inputs.environment }}'
+    runs-on: ubuntu-latest
+
+    env:
+      OS_USERNAME:   ${{ secrets.OS_USERNAME }}
+      OS_PASSWORD:   ${{ secrets.OS_PASSWORD }}
+      OS_DOMAIN_NAME: "Default"
+
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.environment }}
+
+      - name: Installation de Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Init & Destroy
+        run: |
+          cd terraform
+          terraform init
+          terraform workspace select ${{ inputs.environment }} || terraform workspace new ${{ inputs.environment }}
+          terraform destroy -auto-approve
+
+      - name: Confirmation de destruction
+        run: |
+          echo "💥 Infrastructure '${{ inputs.environment }}' détruite avec succès."
