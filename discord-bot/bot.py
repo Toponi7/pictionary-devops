@@ -95,7 +95,12 @@ async def instances(interaction: discord.Interaction):
         lines = []
         for s in servers:
             emoji = SERVER_STATUS_EMOJI.get(s.status, "❓")
-            ip = s.access_ipv4 or "IP inconnue"
+            ip = "IP inconnue"
+            for addrs in s.addresses.values():
+                for addr in addrs:
+                    if addr.get("version") == 4:
+                        ip = addr["addr"]
+                        break
             lines.append(f"{emoji} **{s.name}** — `{s.status}` — `{ip}`")
 
         await interaction.followup.send("\n".join(lines))

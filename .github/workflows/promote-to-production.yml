@@ -9,9 +9,32 @@ on:
       - preprod
 
 jobs:
+
+  notify-discord:
+    name: 'Notification Discord — En attente de validation'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Envoyer la notification Discord
+        run: |
+          curl -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "embeds": [{
+                "title": "⏳ Promotion en attente de validation",
+                "description": "La préprod est déployée et validée.\nUne approbation manuelle est requise pour promouvoir en **production**.",
+                "color": 16776960,
+                "fields": [
+                  {"name": "Déclenché par", "value": "${{ github.actor }}", "inline": true},
+                  {"name": "Commit", "value": "`${{ github.event.workflow_run.head_sha }}`", "inline": true}
+                ],
+                "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              }]
+            }'
+
   promote:
     name: 'Promotion Preprod → Production'
     runs-on: ubuntu-latest
+    needs: notify-discord
     environment: production
 
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
