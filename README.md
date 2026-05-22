@@ -13,6 +13,7 @@
 - [Stack technique](#stack-technique)
 - [Structure du dépôt](#structure-du-dépôt)
 - [Secrets GitHub requis](#secrets-github-requis)
+- [Bot Discord](#bot-discord)
 - [Démo 1 — Destruction et redéploiement complet](#démo-1--destruction-et-redéploiement-complet)
 - [Démo 2 — Intégration continue vers la préprod](#démo-2--intégration-continue-vers-la-préprod)
 - [Monitoring & Observabilité](#monitoring--observabilité)
@@ -25,7 +26,6 @@
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          GitHub Repository                          │
-│                                                                     │
 │   branch: main          ──────────────────►  prod                  │
 │   branch: preprod       ──────────────────►  preprod               │
 └────────────┬───────────────────────────────────────────────────────┘
@@ -34,39 +34,35 @@
 ┌─────────────────────────────────────────────────────────────────────┐
 │                       GitHub Actions (CI/CD)                        │
 │                                                                     │
-│  [1] docker-build.yml              [2] deploy-infra.yml            │
-│  Build image PHP                   Terraform workspace              │
-│  Push GHCR :latest / :preprod ──►  Ansible playbook                │
-│  Déclenche (2) si succès           Validations automatisées        │
+│  [1] docker-build.yml       [2] deploy-infra.yml                   │
+│  Build & push image GHCR    Terraform + Ansible + validations       │
+│                                      │                              │
+│                             [3] promote-to-production.yml           │
+│                             Notif Discord ──► approbation ──► prod  │
+│                                                                     │
+│  [4] terraform-destroy.yml  (déclenché via bot Discord)             │
 └──────────┬──────────────────────────────┬───────────────────────────┘
            │                              │
            ▼                              ▼
-┌──────────────────┐           ┌──────────────────────────────────────┐
-│  GHCR            │           │  OVH Public Cloud (OpenStack)        │
-│                  │           │                                      │
-│  :latest         │           │  ┌──────────────────────────────┐   │
-│  :preprod-latest │           │  │  VM Debian 12 (b3-8-flex)    │   │
-│  :sha-xxxxxxx    │           │  │                              │   │
-│  :V{n}           │           │  │  K3s (Kubernetes léger)      │   │
-└──────────────────┘           │  │                              │   │
-                               │  │  ┌──────────┐ ┌──────────┐  │   │
-                               │  │  │ Pod web  │ │ Pod web  │  │   │
-                               │  │  │ PHP x2   │ │ PHP x2   │  │   │
-                               │  │  └────┬─────┘ └─────┬────┘  │   │
-                               │  │       └──────┬───────┘       │   │
-                               │  │         ┌────▼─────┐         │   │
-                               │  │         │ Pod DB   │         │   │
-                               │  │         │ MariaDB  │         │   │
-                               │  │         └──────────┘         │   │
-                               │  │                              │   │
-                               │  │  ┌─── Monitoring ─────────┐  │   │
-                               │  │  │ Prometheus  (interne)  │  │   │
-                               │  │  │ Grafana     :30080     │  │   │
-                               │  │  │ Loki        :3100      │  │   │
-                               │  │  │ Promtail    (agent)    │  │   │
-                               │  │  └───────────────────────┘  │   │
-                               │  └──────────────────────────────┘   │
-                               └──────────────────────────────────────┘
+┌──────────────────┐      ┌───────────────────────────────────────────┐
+│  GHCR            │      │  OVH Public Cloud (OpenStack)             │
+│  :latest         │      │                                           │
+│  :preprod-latest │      │  ┌─────────────────────────────────────┐  │
+│  :sha-xxxxxxx    │      │  │  VM Debian 12 (b3-8-flex)           │  │
+│  :V{n}           │      │  │  K3s ── 2× Pod web (PHP)            │  │
+└──────────────────┘      │  │       ── Pod DB (MariaDB)           │  │
+                          │  │  Prometheus · Grafana :30080        │  │
+                          │  │  Loki · Promtail                    │  │
+                          │  └─────────────────────────────────────┘  │
+                          └───────────────────────────────────────────┘
+                                           ▲
+┌──────────────────────────────────────────┤
+│  Bot Discord (Docker local)              │
+│  /deploy   ──►  GitHub Actions API       │
+│  /destroy  ──►  OpenStack API (direct)   │
+│  /instances──►  OpenStack API (direct)   │
+│  /status   ──►  GitHub Actions API       │
+└──────────────────────────────────────────┘
 ```
 
 ---
@@ -80,11 +76,12 @@
 | **Conteneurisation** | Docker | Build & packaging de l'image |
 | **Registre d'images** | GHCR (GitHub Container Registry) | Stockage versionné des images |
 | **Orchestration** | K3s (Kubernetes léger) | Déploiement, scaling, rolling update |
-| **Infrastructure** | Terraform + OpenStack OVH | Provisionnement de la VM cloud |
+| **Infrastructure** | Terraform + OpenStack OVH | Provisionnement des VMs cloud |
 | **Configuration** | Ansible | Installation K3s, app, monitoring |
 | **Métriques** | Prometheus + Grafana (Helm) | Dashboards & alerting |
 | **Logs** | Loki + Promtail (Helm) | Collecte et consultation des logs |
 | **CI/CD** | GitHub Actions | Automatisation build → test → deploy |
+| **Bot DevOps** | Python + discord.py + openstacksdk | Pilotage de l'infra depuis Discord |
 
 ---
 
@@ -94,184 +91,205 @@
 pictionary-devops/
 │
 ├── src/
-│   └── index.php                    # Application PHP (frontend + API AJAX)
+│   └── index.php                      # Application PHP (frontend + API AJAX)
 │
 ├── kubernetes/
-│   └── pictionary-app.yaml          # Manifestes K8s :
-│                                    #   - ConfigMap (init SQL)
-│                                    #   - Deployment MariaDB
-│                                    #   - Deployment web (2 replicas, RollingUpdate)
-│                                    #     ↳ initContainer : attend MariaDB
-│                                    #     ↳ readinessProbe + livenessProbe HTTP
-│                                    #   - Services + Ingress
+│   └── pictionary-app.yaml            # ConfigMap, Deployments (RollingUpdate,
+│                                      # initContainer, probes), Services, Ingress
 │
 ├── terraform/
-│   └── main.tf                      # VM OVH via OpenStack, workspaces prod/preprod
+│   └── main.tf                        # VM OVH via OpenStack, workspaces prod/preprod
 │
 ├── ansible/
-│   ├── playbook.yml                 # Installe K3s, déploie l'app,
-│   │                                # Prometheus+Grafana, Loki+Promtail,
-│   │                                # dashboard Grafana provisionné
-│   └── files/
-│       └── pictionary-dashboard.json  # Dashboard Grafana custom (injecté via ConfigMap)
+│   ├── playbook.yml                   # K3s, app, Prometheus+Grafana, Loki+Promtail,
+│   │                                  # dashboard custom provisionné
+│   └── files/dashboards/
+│       └── pictionary-dashboard.json  # Dashboard Grafana injecté via ConfigMap
+│
+├── discord-bot/
+│   ├── bot.py                         # Bot Discord : /deploy /destroy /instances /status
+│   ├── Dockerfile                     # Image Python 3.12-slim
+│   ├── docker-compose.yml             # Lancement local du bot
+│   ├── requirements.txt               # discord.py, requests, openstacksdk
+│   └── .env.example                   # Template des variables d'environnement
 │
 ├── .github/workflows/
-│   ├── docker-build.yml             # Build & push image GHCR sur push src/ ou Dockerfile
-│   └── deploy-infra.yml             # Terraform + Ansible + 3 validations automatisées
+│   ├── docker-build.yml               # Build & push image GHCR
+│   ├── deploy-infra.yml               # Terraform + Ansible + 3 validations
+│   ├── promote-to-production.yml      # Notif Discord + approbation + promotion prod
+│   └── terraform-destroy.yml         # Destruction ciblée via workflow_dispatch
 │
-├── Dockerfile                       # Image PHP 8.2-apache + PDO MySQL
-├── init.sql                         # Création table `mots` + données initiales
-└── docker-compose.yml               # Stack locale : web + MariaDB (dev uniquement)
+├── Dockerfile                         # Image PHP 8.2-apache + PDO MySQL
+├── init.sql                           # Création table `mots` + données initiales
+└── docker-compose.yml                 # Stack locale dev : web + MariaDB
 ```
 
 ---
 
 ## Secrets GitHub requis
 
-À configurer dans **Settings → Secrets and variables → Actions** du dépôt :
+À configurer dans **Settings → Secrets and variables → Actions** :
 
 | Secret | Description |
 |---|---|
 | `OS_USERNAME` | Identifiant OpenStack OVH |
 | `OS_PASSWORD` | Mot de passe OpenStack OVH |
-| `SSH_PRIVATE_KEY` | Clé SSH privée correspondant à la keypair `rudy` sur OVH |
-| `GITHUB_TOKEN` | Automatiquement injecté par GitHub — aucune action requise |
+| `SSH_PRIVATE_KEY` | Clé SSH privée (keypair `rudy` sur OVH) |
+| `DISCORD_WEBHOOK_URL` | URL webhook Discord pour les notifications CI/CD |
+| `GITHUB_TOKEN` | Automatiquement injecté par GitHub |
+
+---
+
+## Bot Discord
+
+Le bot tourne en local dans Docker et permet de piloter l'infrastructure directement depuis Discord.
+
+### Commandes disponibles
+
+| Commande | Action |
+|---|---|
+| `/deploy [prod\|preprod]` | Déclenche `deploy-infra.yml` via l'API GitHub Actions |
+| `/destroy` | Liste les VMs OVH en autocomplete, supprime l'instance choisie via l'API OpenStack |
+| `/instances` | Affiche toutes les VMs OVH avec leur statut et IP |
+| `/status` | Affiche le statut des 3 derniers workflow runs |
+
+### Lancement
+
+```bash
+# 1. Copier et remplir le fichier de config
+cp discord-bot/.env.example discord-bot/.env
+
+# 2. Lancer le bot
+cd discord-bot
+docker compose up --build
+```
+
+### Variables requises dans `discord-bot/.env`
+
+```env
+DISCORD_TOKEN=...       # Discord Developer Portal → Bot → Reset Token
+DISCORD_GUILD_ID=...    # Clic droit sur ton serveur → Copier l'identifiant
+GITHUB_TOKEN=...        # PAT GitHub avec scope Actions (read & write)
+GITHUB_REPO=Toponi7/pictionary-devops
+OS_USERNAME=...         # Identifiants OVH
+OS_PASSWORD=...
+OS_PROJECT_ID=ac782cb2bd6442dfa69ced8526c8a095
+OS_REGION=BHS5
+```
 
 ---
 
 ## Démo 1 — Destruction et redéploiement complet
 
-> **Scénario** : On simule une catastrophe totale — la VM de production est détruite. On démontre que l'infrastructure entière peut être recréée et l'application redéployée en **une seule commande**, sans intervention manuelle.
+> **Scénario** : On simule une catastrophe totale. La VM de production est détruite depuis Discord. On démontre que l'infrastructure entière est recréée et l'application redéployée automatiquement, sans intervention manuelle.
 
-### Ce qui se passe sous le capot
+### Flow complet
 
 ```
-terraform destroy  ──►  VM supprimée sur OVH
-        │
-        └──►  workflow_dispatch sur main
-                      │
-              [Terraform Apply]
-              ├── Crée une nouvelle VM Debian 12 sur OVH
-              └── Récupère l'IP publique
-                      │
-              [Ansible Playbook]
-              ├── Étape 0 : Configure l'accès GHCR sur K3s
-              ├── Étape 1 : Installe K3s + attend l'API (port 6443)
-              ├── Étape 2 : Applique pictionary-app.yaml
-              │            (2 pods web avec initContainer + probes,
-              │             1 pod MariaDB, Service + Ingress)
-              ├── Étape 3 : Installe Helm
-              ├── Étape 4 : Déploie Prometheus + Grafana (NodePort 30080)
-              ├── Étape 5 : Déploie Loki + Promtail
-              │            (collecte automatique des logs de tous les pods)
-              │            (datasource Loki configurée dans Grafana)
-              └── Étape 6 : Injecte le dashboard Grafana custom via ConfigMap
-                      │
-              ✅ Tout est de nouveau en ligne
+Discord : /destroy  ──►  autocomplete liste les VMs OVH
+                    ──►  sélection "pictionary-prod-node-1"
+                    ──►  suppression directe via API OpenStack
+                                  │
+                         VM disparaît du dashboard OVH
+                                  │
+Discord : /deploy prod ──►  GitHub Actions : deploy-infra.yml
+                                  │
+                        [Terraform Apply]
+                        Crée une nouvelle VM Debian 12 sur OVH
+                                  │
+                        [Ansible Playbook]
+                        ├── K3s installé
+                        ├── pictionary-app.yaml appliqué
+                        │     (2 pods web + MariaDB + Ingress)
+                        ├── Prometheus + Grafana  ──►  :30080
+                        ├── Loki + Promtail       ──►  logs collectés
+                        └── Dashboard Grafana injecté
+                                  │
+                        ✅ Tout est de nouveau en ligne
 ```
 
 ### Étapes de la démo
 
-**1. Détruire l'infrastructure existante**
+**1. Détruire la VM depuis Discord**
 
-```bash
-cd terraform
-terraform workspace select main
-terraform destroy -auto-approve
+```
+/destroy  →  sélectionner "pictionary-prod-node-1 (ACTIVE)"  →  Entrée
 ```
 
 > La VM disparaît du dashboard OVH. L'application n'est plus accessible.
 
-**2. Relancer le déploiement complet via GitHub Actions**
-
-Aller sur : `Actions → Deploy Infrastructure → Run workflow → Branch: main`
-
-Ou via CLI :
-
-```bash
-gh workflow run deploy-infra.yml --ref main
-```
-
-**3. Suivre le pipeline en direct**
+**2. Relancer le déploiement complet**
 
 ```
-✅ Checkout du code
-✅ Terraform init / workspace main / apply  ──►  nouvelle VM créée, IP récupérée
-✅ Attente SSH (port 22 ouvert sur la VM)
-✅ Ansible playbook
-   ├── K3s installé et opérationnel
-   ├── pictionary-app.yaml appliqué
-   │     ├── Pod MariaDB démarré
-   │     └── 2 pods web (initContainer attend MariaDB, probes OK)
-   ├── Prometheus + Grafana déployés  ──►  :30080
-   ├── Loki + Promtail déployés       ──►  logs collectés
-   └── Dashboard Pictionary injecté dans Grafana
-✅ Application accessible sur l'IP de la nouvelle VM
+/deploy prod
 ```
 
-**4. Résultat**
+Ou via GitHub Actions : `Actions → Deploy Infrastructure → Run workflow → Branch: main`
 
-- Application accessible sur `http://<IP_VM>` (port 80)
-- Grafana accessible sur `http://<IP_VM>:30080` (admin / admin)
-- Dashboard custom Pictionary visible dans Grafana
-- Logs de l'application disponibles dans Grafana → Loki
-- Zéro intervention manuelle après le `terraform destroy`
+**3. Suivre le pipeline**
+
+```
+✅ Terraform apply  ──►  nouvelle VM créée, IP récupérée
+✅ Ansible
+   ├── K3s opérationnel
+   ├── 2 pods web + MariaDB démarrés
+   ├── Grafana :30080
+   └── Loki + dashboard injectés
+✅ Application accessible sur la nouvelle IP
+```
 
 ---
 
 ## Démo 2 — Intégration continue vers la préprod
 
-> **Scénario** : Un développeur modifie le code de l'application. Il pousse sur la branche `preprod`. En quelques minutes, la modification est **automatiquement déployée, testée et validée sur la préprod**, sans toucher la production.
+> **Scénario** : Un développeur pousse une modification sur `preprod`. Elle est automatiquement déployée, testée, puis une notification Discord demande une validation humaine avant promotion en production.
 
-### Ce qui se passe sous le capot
+### Flow complet
 
 ```
 git push origin preprod  (modif dans src/)
         │
-        ▼
-[docker-build.yml]
-  Build de l'image Docker
-  Push vers GHCR :
-    ├── preprod-latest
-    ├── preprod-V{run_number}
-    └── sha-{7 chars du commit}
+[docker-build.yml]  ──►  Push :preprod-latest + :sha-abc1234
         │
-        └──► succès ──► [deploy-infra.yml déclenché automatiquement]
+        └──► succès ──► [deploy-infra.yml]
                               │
-                      TARGET_ENV = preprod
-                      IMAGE_TAG  = sha-xxxxxxx
+                        Terraform workspace preprod
+                        Ansible ──► RollingUpdate sha-abc1234
                               │
-                      [Terraform]
-                      workspace preprod
-                      ──► VM "pictionary-preprod-node-1" (créée si absente)
+                        Validations automatisées :
+                        ├── ✅ Pods stables (RESTARTS = 0)
+                        ├── ✅ Smoke test HTTP 200
+                        └── ✅ Logs sans erreur critique
                               │
-                      [Ansible]
-                      Remplace le tag image dans pictionary-app.yaml
-                      k3s kubectl apply  ──►  RollingUpdate sans downtime
+                        ✅ Préprod OK
                               │
-                      [Validations automatisées]
-                      ├── ✅ Validation 1 : Pods stables (RESTARTS = 0)
-                      ├── ✅ Validation 2 : Smoke test HTTP 200
-                      └── ✅ Validation 3 : Pas d'erreur critique dans les logs
+                        [promote-to-production.yml]
                               │
-                      ✅ Préprod validée — prod intacte
+                        notify-discord  ──►  Discord :
+                        │               "⏳ Préprod validée
+                        │                En attente d'approbation prod
+                        │                👉 [lien GitHub]"
+                        │
+                        promote  ──►  [attend l'approbation humaine]
+                              │
+                        quelqu'un approuve sur GitHub
+                              │
+                        ├── Re-tag :preprod-latest → :latest sur GHCR
+                        ├── Terraform workspace main ──► VM prod
+                        ├── Validations prod (pods, HTTP, logs)
+                        └── Rollback automatique si échec
 ```
 
 ### Étapes de la démo
 
-**1. Faire une modification dans le code**
-
-Par exemple, dans `src/index.php`, modifier le titre :
+**1. Modifier le code**
 
 ```php
-// Avant
-<h1>Pictionary !</h1>
-
-// Après
+// src/index.php
 <h1>Pictionary ! 🚀 v2</h1>
 ```
 
-**2. Pousser sur la branche `preprod`**
+**2. Pousser sur `preprod`**
 
 ```bash
 git checkout preprod
@@ -280,58 +298,50 @@ git commit -m "feat: mise à jour titre v2"
 git push origin preprod
 ```
 
-**3. Observer les pipelines s'enchaîner dans GitHub Actions**
+**3. Observer dans GitHub Actions**
 
 ```
-[docker-build.yml]
-  ✅ Build image  ──►  Push :preprod-latest + :sha-abc1234
-
-[deploy-infra.yml]  (déclenché automatiquement après le build)
-  ✅ Terraform workspace preprod  ──►  VM preprod provisionnée
-  ✅ Ansible  ──►  Nouveau tag sha-abc1234 déployé en RollingUpdate
-  ✅ Validation 1  ──►  k3s kubectl rollout status + RESTARTS = 0
-  ✅ Validation 2  ──►  curl http://<IP_preprod> → 200 OK
-  ✅ Validation 3  ──►  grep logs → aucune erreur critique
+docker-build.yml      ✅  Build + Push :preprod-latest
+deploy-infra.yml      ✅  Deploy preprod + 3 validations
+promote-to-production ⏳  Notification Discord envoyée → en attente
 ```
 
-**4. Vérifier sur la préprod**
+**4. Recevoir la notification Discord**
 
-L'IP de la VM préprod est affichée dans les logs Terraform du pipeline.
-La modification est visible — la prod (`main`) est **inchangée**.
+```
+⏳ Promotion en attente de validation
+La préprod est déployée et validée.
+Une approbation manuelle est requise → [lien]
+```
 
-### Détail des validations automatisées (préprod uniquement)
+**5. Approuver sur GitHub → prod déployée automatiquement**
+
+### Détail des validations automatisées
 
 | # | Validation | Ce qui est vérifié | Échec si… |
 |---|---|---|---|
-| 1 | **Stabilité des pods** | `kubectl rollout status` + compteur de redémarrages | Un pod a redémarré (`RESTARTS > 0`) |
-| 2 | **Smoke test HTTP** | `curl http://<IP>` pendant 60s | Aucun `200 OK` reçu |
-| 3 | **Analyse des logs** | 200 dernières lignes des pods web | `exception`, `fatal error`, `SQL error`, `connection refused` détectés |
+| 1 | **Stabilité des pods** | `kubectl rollout status` + `RESTARTS` | Un pod a redémarré |
+| 2 | **Smoke test HTTP** | `curl http://<IP>` pendant 60s | Aucun `200 OK` |
+| 3 | **Analyse des logs** | 200 dernières lignes des pods | `exception`, `fatal error`, `SQL error` détectés |
 
 ---
 
 ## Monitoring & Observabilité
 
-La stack complète est déployée automatiquement par Ansible via Helm sur chaque environnement.
-
-### Accès
+Déployé automatiquement par Ansible via Helm sur chaque environnement.
 
 | Outil | Accès | Identifiants | Rôle |
 |---|---|---|---|
 | **Grafana** | `http://<IP_VM>:30080` | `admin` / `admin` | Dashboards métriques + logs |
 | **Prometheus** | Interne au cluster | — | Collecte des métriques K8s |
-| **Loki** | `http://loki.monitoring.svc.cluster.local:3100` | — | Agrégation des logs |
+| **Loki** | Interne au cluster (DNS K8s uniquement) | — | Agrégation des logs |
 | **Promtail** | Agent sur chaque pod | — | Envoi des logs vers Loki |
 
-### Dashboards disponibles dans Grafana
+### Consulter les logs dans Grafana
 
-- **kube-prometheus-stack** : métriques CPU, mémoire, réseau, état des pods (inclus automatiquement)
-- **Pictionary Dashboard** : dashboard custom (`pictionary-dashboard.json`) injecté via ConfigMap et détecté automatiquement par Grafana au label `grafana_dashboard=1`
-
-### Consulter les logs applicatifs dans Grafana
-
-1. Ouvrir Grafana → **Explore**
-2. Sélectionner la datasource **Loki**
-3. Utiliser le filtre : `{app="web"}`
+1. Grafana → **Explore**
+2. Datasource : **Loki**
+3. Filtre : `{app="web"}`
 
 ---
 
@@ -344,34 +354,15 @@ docker compose up --build
 # Accès : http://localhost:8080
 ```
 
-### Cloud (prod & préprod)
-
-Tout est piloté par GitHub Actions. Aucune commande manuelle requise en dehors des démos.
-
-Pour un déploiement manuel d'urgence :
-
-```bash
-cd terraform
-terraform workspace select main   # ou preprod
-terraform apply -auto-approve
-
-# Récupérer l'IP
-terraform output instance_ip
-
-# Lancer Ansible manuellement
-ansible-playbook -i "IP_VM," -u debian \
-  --private-key ~/.ssh/id_rsa \
-  -e "ghcr_username=TON_USER ghcr_password=TON_TOKEN image_tag=latest" \
-  ansible/playbook.yml
-```
-
 ### Comparatif prod / préprod
 
 | | Production (`main`) | Préprod (`preprod`) |
 |---|---|---|
 | **VM** | `pictionary-prod-node-1` | `pictionary-preprod-node-1` |
 | **Image tag** | `:latest`, `:V{n}` | `:preprod-latest`, `:preprod-V{n}` |
-| **Déclencheur deploy** | Push `main` ou `workflow_dispatch` | Après build réussi sur `preprod` |
+| **Déclencheur deploy** | `/deploy prod` ou `workflow_dispatch` | Push `preprod` |
 | **Workspace Terraform** | `main` | `preprod` |
-| **Validations auto** | Non | Oui (pods, HTTP 200, logs) |
-| **Rolling update** | Non | Oui (`maxSurge: 1`, `maxUnavailable: 0`) |
+| **Validations auto** | Oui (pods, HTTP, logs) | Oui (pods, HTTP, logs) |
+| **Rolling update** | Oui | Oui (`maxSurge: 1`, `maxUnavailable: 0`) |
+| **Promotion** | Via approbation Discord + GitHub | — |
+| **Rollback auto** | Oui (digest précédent) | — |
