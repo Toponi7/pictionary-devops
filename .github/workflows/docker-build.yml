@@ -8,7 +8,7 @@ on:
     # Ne déclenche le build que si ces fichiers sont modifiés
     paths:
       - 'src/**' # <-- Modifié pour inclure tout le dossier src, plus sûr que juste index.php
-      - 'Dockerfile'
+      - 'src/Dockerfile'
 
 env:
   REGISTRY: ghcr.io
@@ -57,7 +57,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: src/.
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
