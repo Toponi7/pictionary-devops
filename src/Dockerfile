@@ -5,7 +5,7 @@ FROM php:8.2-apache
 RUN docker-php-ext-install pdo pdo_mysql
 
 # Copie du code source dans le dossier par défaut d'Apache
-COPY src/ /var/www/html/
+COPY . /var/www/html/
 
 # Expose le port 80
 EXPOSE 80
